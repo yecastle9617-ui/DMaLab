@@ -47,6 +47,9 @@ Thumbs.db
 *.log
 .env
 
+# 네이버 로그인 세션 정보 (보안상 민감한 정보)
+naver_state.json
+
 
 
 
