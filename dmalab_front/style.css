@@ -580,6 +580,115 @@ button:disabled {
     margin-top: 15px;
 }
 
+/* 이미지 표시 스타일 */
+.images-container {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    margin-top: 15px;
+}
+
+.images-container h4 {
+    margin-bottom: 15px;
+    color: #333;
+}
+
+.images-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 15px;
+    margin-top: 15px;
+}
+
+.image-item {
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #f8f9fa;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.image-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.image-item img {
+    width: 100%;
+    height: auto;
+    display: block;
+    max-height: 300px;
+    object-fit: contain;
+    background: #f0f0f0;
+}
+
+.image-error {
+    padding: 20px;
+    text-align: center;
+    color: #999;
+    font-size: 0.9rem;
+}
+
+.image-link {
+    display: block;
+    padding: 8px;
+    text-align: center;
+    background: #667eea;
+    color: white;
+    text-decoration: none;
+    font-size: 0.85rem;
+    font-weight: 500;
+    transition: background 0.2s;
+}
+
+.image-link:hover {
+    background: #5568d3;
+}
+
+/* 링크 표시 스타일 */
+.links-container {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    margin-top: 15px;
+}
+
+.links-container h4 {
+    margin-bottom: 15px;
+    color: #333;
+}
+
+.links-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.link-item {
+    padding: 12px;
+    background: #f8f9fa;
+    border-radius: 6px;
+    border-left: 3px solid #667eea;
+}
+
+.link-item a {
+    color: #667eea;
+    text-decoration: none;
+    word-break: break-all;
+    font-size: 0.9rem;
+}
+
+.link-item a:hover {
+    text-decoration: underline;
+}
+
+@media (max-width: 768px) {
+    .images-grid {
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 10px;
+    }
+}
+
 /* JSON 표시 (기본) - 필요시에만 사용 */
 .result pre {
     background: #2d2d2d;

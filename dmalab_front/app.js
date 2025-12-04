@@ -1,5 +1,26 @@
 const API_BASE_URL = 'http://localhost:8000';
 
+// 이미지 URL을 프록시를 통해 로드하는 헬퍼 함수
+function getProxyImageUrl(imageUrl, outputDir = null) {
+    if (!imageUrl) return '';
+    
+    // 이미 프록시 URL이거나 저장된 경로인 경우
+    if (imageUrl.startsWith('/api/image-proxy') || imageUrl.startsWith('/static/')) {
+        return `${API_BASE_URL}${imageUrl}`;
+    }
+    
+    // URL 인코딩
+    const encodedUrl = encodeURIComponent(imageUrl);
+    let proxyUrl = `${API_BASE_URL}/api/image-proxy?url=${encodedUrl}`;
+    
+    // output_dir이 있으면 추가
+    if (outputDir) {
+        proxyUrl += `&output_dir=${encodeURIComponent(outputDir)}`;
+    }
+    
+    return proxyUrl;
+}
+
 // 탭 전환
 document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -114,6 +135,48 @@ function renderCrawlResult(data) {
         console.log('renderCrawlResult - body_text 타입:', typeof data.body_text);
         console.log('renderCrawlResult - body_text 길이:', data.body_text ? data.body_text.length : 0);
         
+        // 이미지 URL 표시
+        if (data.image_urls && data.image_urls.length > 0) {
+            html += `
+                <div class="images-container">
+                    <h4>이미지 (${data.image_urls.length}개)</h4>
+                    <div class="images-grid">
+                        ${data.image_urls.map((imgUrl, idx) => {
+                            const proxyUrl = getProxyImageUrl(imgUrl);
+                            return `
+                            <div class="image-item">
+                                <img src="${proxyUrl}" 
+                                     alt="이미지 ${idx + 1}" 
+                                     loading="lazy"
+                                     data-original-url="${escapeHtml(imgUrl)}"
+                                     onerror="console.error('이미지 로드 실패:', '${imgUrl}'); this.style.display='none'; this.nextElementSibling.style.display='block';"
+                                     onload="console.log('이미지 로드 성공:', '${imgUrl}');">
+                                <div class="image-error" style="display: none;">이미지를 불러올 수 없습니다<br><small>${escapeHtml(imgUrl)}</small></div>
+                                <a href="${imgUrl}" target="_blank" class="image-link">원본 보기</a>
+                            </div>
+                        `;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+        }
+        
+        // 링크 URL 표시
+        if (data.link_urls && data.link_urls.length > 0) {
+            html += `
+                <div class="links-container">
+                    <h4>링크 (${data.link_urls.length}개)</h4>
+                    <div class="links-list">
+                        ${data.link_urls.map((linkUrl, idx) => `
+                            <div class="link-item">
+                                <a href="${linkUrl}" target="_blank">${escapeHtml(linkUrl)}</a>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+        
         if (data.body_text) {
             const bodyText = String(data.body_text).trim();
             console.log('renderCrawlResult - trim 후 길이:', bodyText.length);
@@ -163,6 +226,40 @@ function renderCrawlBulkResult(data) {
                         <p><strong>제목:</strong> ${escapeHtml(result.title || 'N/A')}</p>
                         <p><strong>URL:</strong> <a href="${result.url}" target="_blank">${result.url}</a></p>
                         ${result.body_length ? `<p><strong>본문 길이:</strong> ${result.body_length.toLocaleString()}자</p>` : ''}
+                        ${result.image_urls && result.image_urls.length > 0 ? `
+                            <div class="images-container" style="margin-top: 15px;">
+                                <h4 style="margin-bottom: 10px; color: #333; font-size: 1rem;">이미지 (${result.image_urls.length}개)</h4>
+                                <div class="images-grid">
+                                    ${result.image_urls.map((imgUrl, idx) => {
+                                        const proxyUrl = getProxyImageUrl(imgUrl);
+                                        return `
+                                        <div class="image-item">
+                                            <img src="${proxyUrl}" 
+                                                 alt="이미지 ${idx + 1}" 
+                                                 loading="lazy"
+                                                 data-original-url="${escapeHtml(imgUrl)}"
+                                                 onerror="console.error('이미지 로드 실패:', '${imgUrl}'); this.style.display='none'; this.nextElementSibling.style.display='block';"
+                                                 onload="console.log('이미지 로드 성공:', '${imgUrl}');">
+                                            <div class="image-error" style="display: none;">이미지를 불러올 수 없습니다<br><small>${escapeHtml(imgUrl)}</small></div>
+                                            <a href="${imgUrl}" target="_blank" class="image-link">원본 보기</a>
+                                        </div>
+                                    `;
+                                    }).join('')}
+                                </div>
+                            </div>
+                        ` : ''}
+                        ${result.link_urls && result.link_urls.length > 0 ? `
+                            <div class="links-container" style="margin-top: 15px;">
+                                <h4 style="margin-bottom: 10px; color: #333; font-size: 1rem;">링크 (${result.link_urls.length}개)</h4>
+                                <div class="links-list">
+                                    ${result.link_urls.map((linkUrl, idx) => `
+                                        <div class="link-item">
+                                            <a href="${linkUrl}" target="_blank">${escapeHtml(linkUrl)}</a>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        ` : ''}
                         ${result.body_text && result.body_text.trim() ? `
                             <div class="body-text-container" style="margin-top: 15px;">
                                 <h4 style="margin-bottom: 10px; color: #333; font-size: 1rem;">본문 내용</h4>
@@ -247,6 +344,43 @@ function renderProcessResult(data) {
                                 <strong>주요 키워드:</strong>
                                 <div class="keyword-tags">
                                     ${result.keywords.slice(0, 10).map(k => `<span class="keyword-tag">${escapeHtml(k.keyword)} (${k.count})</span>`).join('')}
+                                </div>
+                            </div>
+                        ` : ''}
+                        ${result.image_urls && result.image_urls.length > 0 ? `
+                            <div class="images-container" style="margin-top: 20px;">
+                                <h4 style="margin-bottom: 15px; color: #333;">이미지 (${result.image_urls.length}개)</h4>
+                                <div class="images-grid">
+                                    ${result.image_urls.map((imgUrl, idx) => {
+                                        // output_dir이 있으면 전달 (process 결과인 경우)
+                                        const outputDir = data.output_dir ? `${data.output_dir}/TOP${result.rank}` : null;
+                                        const proxyUrl = getProxyImageUrl(imgUrl, outputDir);
+                                        const originalUrl = imgUrl.startsWith('/') ? imgUrl : imgUrl.split('?url=')[1] ? decodeURIComponent(imgUrl.split('?url=')[1].split('&')[0]) : imgUrl;
+                                        return `
+                                        <div class="image-item">
+                                            <img src="${proxyUrl}" 
+                                                 alt="이미지 ${idx + 1}" 
+                                                 loading="lazy"
+                                                 data-original-url="${escapeHtml(originalUrl)}"
+                                                 onerror="console.error('이미지 로드 실패:', '${originalUrl}'); this.style.display='none'; this.nextElementSibling.style.display='block';"
+                                                 onload="console.log('이미지 로드 성공:', '${originalUrl}');">
+                                            <div class="image-error" style="display: none;">이미지를 불러올 수 없습니다<br><small>${escapeHtml(originalUrl)}</small></div>
+                                            <a href="${originalUrl}" target="_blank" class="image-link">원본 보기</a>
+                                        </div>
+                                    `;
+                                    }).join('')}
+                                </div>
+                            </div>
+                        ` : ''}
+                        ${result.link_urls && result.link_urls.length > 0 ? `
+                            <div class="links-container" style="margin-top: 15px;">
+                                <h4 style="margin-bottom: 10px; color: #333;">링크 (${result.link_urls.length}개)</h4>
+                                <div class="links-list">
+                                    ${result.link_urls.map((linkUrl, idx) => `
+                                        <div class="link-item">
+                                            <a href="${linkUrl}" target="_blank">${escapeHtml(linkUrl)}</a>
+                                        </div>
+                                    `).join('')}
                                 </div>
                             </div>
                         ` : ''}

@@ -9,6 +9,7 @@ import re
 import time
 import random
 import os
+import json
 from urllib.parse import urlparse, urljoin, parse_qs
 
 
@@ -803,7 +804,7 @@ class NaverCrawler:
             traceback.print_exc()
             return 0
     
-    def _extract_text_with_media_markers(self, element) -> str:
+    def _extract_text_with_media_markers(self, element) -> tuple:
         """
         요소에서 텍스트를 추출하면서 이미지와 링크 태그 위치에 마커를 삽입합니다.
         se-module-image 내의 링크는 [링크 삽입]을 넣지 않고 [이미지 삽입]만 넣습니다.
@@ -815,10 +816,11 @@ class NaverCrawler:
             element: BeautifulSoup 요소
             
         Returns:
-            이미지/링크 마커가 포함된 텍스트
+            (텍스트, 이미지 URL 리스트, 링크 URL 리스트) 튜플
+            이미지/링크 마커가 포함된 텍스트와 마커 순서대로 정렬된 URL 리스트
         """
         if element is None:
-            return ''
+            return ('', [], [])
         
         try:
             # 원본 HTML 문자열 가져오기
@@ -832,16 +834,32 @@ class NaverCrawler:
             link_counter = 0
             emoji_counter = 0
             
+            # 마커 순서대로 URL을 저장할 리스트
+            image_urls = []
+            link_urls = []
+            
+            # URL 정규화 헬퍼 함수
+            def normalize_url(url):
+                """상대 경로를 절대 경로로 변환"""
+                if not url:
+                    return None
+                if url.startswith('//'):
+                    return 'https:' + url
+                elif url.startswith('/'):
+                    return 'https://blog.naver.com' + url
+                elif url.startswith('http'):
+                    return url
+                return None
+            
             # se-module-sticker 모듈 처리: 이미지를 [이모티콘 삽입]으로, 링크는 마커 없이 제거
             sticker_modules = soup.find_all('div', class_=lambda x: x and 'se-module-sticker' in str(x))
             for sticker_module in sticker_modules:
-                # 이미지 태그를 [이모티콘 삽입N]으로 교체
+                # 이미지 태그를 [이모티콘 삽입N]으로 교체 (이모티콘은 URL 수집 안 함)
                 for img in sticker_module.find_all('img'):
                     emoji_counter += 1
                     img.replace_with(f'[이모티콘 삽입{emoji_counter}]')
                 # 링크 태그는 제거 (링크 삽입 마커 없이)
                 for link in sticker_module.find_all('a'):
-                    # 링크 내부의 텍스트가 있으면 유지, 없으면 제거
                     link_text = link.get_text(strip=True)
                     if link_text:
                         link.replace_with(link_text)
@@ -851,13 +869,39 @@ class NaverCrawler:
             # se-module-image 모듈 처리: 이미지만 [이미지 삽입]으로, 링크는 마커 없이 제거
             image_modules = soup.find_all('div', class_=lambda x: x and 'se-module-image' in str(x))
             for img_module in image_modules:
-                # 이미지 태그를 [이미지 삽입N]으로 교체
+                # 이미지 태그를 [이미지 삽입N]으로 교체하고 URL 수집
                 for img in img_module.find_all('img'):
-                    image_counter += 1
-                    img.replace_with(f'[이미지 삽입{image_counter}]')
+                    # img 태그의 src 또는 data-src만 사용 (data-linkdata 무시)
+                    img_src = img.get('data-src', '') or img.get('src', '')
+                    
+                    # 썸네일이면 w966으로 변환
+                    if img_src:
+                        # 썸네일 패턴 체크: w80, w100, w200 등 작은 크기 (w966 제외)
+                        if any(pattern in img_src for pattern in ['?type=w80', '?type=w100', '?type=w200', '?type=w300', '?type=w400', '?type=w500']):
+                            base_url = img_src.split('?')[0]
+                            if 'postfiles.pstatic.net' in base_url:
+                                img_src = base_url + '?type=w966'
+                            else:
+                                img_src = base_url
+                        # w966이 이미 있으면 그대로 사용 (고화질)
+                        elif '?type=w966' in img_src:
+                            pass  # 이미 고화질
+                        # 쿼리 파라미터가 없으면 w966 추가 시도
+                        elif '?' not in img_src and 'postfiles.pstatic.net' in img_src:
+                            img_src = img_src + '?type=w966'
+                    
+                    normalized_url = normalize_url(img_src)
+                    if normalized_url:
+                        image_counter += 1
+                        image_urls.append(normalized_url)
+                        img.replace_with(f'[이미지 삽입{image_counter}]')
+                    else:
+                        # URL이 없어도 마커는 삽입
+                        image_counter += 1
+                        img.replace_with(f'[이미지 삽입{image_counter}]')
+                
                 # 링크 태그는 제거 (링크 삽입 마커 없이)
                 for link in img_module.find_all('a'):
-                    # 링크 내부의 텍스트가 있으면 유지, 없으면 제거
                     link_text = link.get_text(strip=True)
                     if link_text:
                         link.replace_with(link_text)
@@ -867,8 +911,14 @@ class NaverCrawler:
             # se-module-oglink 모듈 처리: 전체 모듈을 [링크 삽입N] 하나로 교체 (텍스트는 제외)
             oglink_modules = soup.find_all('div', class_=lambda x: x and 'se-module-oglink' in str(x))
             for oglink_module in oglink_modules:
-                # 전체 oglink 모듈을 [링크 삽입N] 하나로 교체 (내부 텍스트는 모두 제거)
+                # oglink 모듈에서 링크 URL 추출
+                link_elem = oglink_module.find('a', href=True)
+                link_href = link_elem.get('href', '') if link_elem else ''
+                normalized_link = normalize_url(link_href) if link_href else None
+                
                 link_counter += 1
+                if normalized_link:
+                    link_urls.append(normalized_link)
                 oglink_module.replace_with(f'[링크 삽입{link_counter}]')
             
             # 나머지 이미지 태그 처리 (se-module-image, se-module-sticker가 아닌 곳의 이미지)
@@ -879,8 +929,33 @@ class NaverCrawler:
                 parent_oglink_module = img.find_parent('div', class_=lambda x: x and 'se-module-oglink' in str(x))
                 
                 if not parent_sticker_module and not parent_img_module and not parent_oglink_module:
-                    image_counter += 1
-                    img.replace_with(f'[이미지 삽입{image_counter}]')
+                    # img 태그의 src 또는 data-src만 사용 (data-linkdata 무시)
+                    img_src = img.get('data-src', '') or img.get('src', '')
+                    
+                    # 썸네일이면 w966으로 변환
+                    if img_src:
+                        # 썸네일 패턴 체크: w80, w100, w200 등 작은 크기 (w966 제외)
+                        if any(pattern in img_src for pattern in ['?type=w80', '?type=w100', '?type=w200', '?type=w300', '?type=w400', '?type=w500']):
+                            base_url = img_src.split('?')[0]
+                            if 'postfiles.pstatic.net' in base_url:
+                                img_src = base_url + '?type=w966'
+                            else:
+                                img_src = base_url
+                        # w966이 이미 있으면 그대로 사용 (고화질)
+                        elif '?type=w966' in img_src:
+                            pass  # 이미 고화질
+                        # 쿼리 파라미터가 없으면 w966 추가 시도
+                        elif '?' not in img_src and 'postfiles.pstatic.net' in img_src:
+                            img_src = img_src + '?type=w966'
+                    
+                    normalized_url = normalize_url(img_src)
+                    if normalized_url:
+                        image_counter += 1
+                        image_urls.append(normalized_url)
+                        img.replace_with(f'[이미지 삽입{image_counter}]')
+                    else:
+                        image_counter += 1
+                        img.replace_with(f'[이미지 삽입{image_counter}]')
             
             # 나머지 링크 태그 처리 (se-module-image, se-module-oglink, se-module-sticker가 아닌 곳의 링크)
             for link in soup.find_all('a'):
@@ -890,8 +965,13 @@ class NaverCrawler:
                 parent_oglink_module = link.find_parent('div', class_=lambda x: x and 'se-module-oglink' in str(x))
                 
                 if not parent_sticker_module and not parent_img_module and not parent_oglink_module:
+                    link_href = link.get('href', '')
+                    normalized_link = normalize_url(link_href) if link_href and link_href.startswith('http') else None
+                    
                     link_text = link.get_text(strip=True)
                     link_counter += 1
+                    if normalized_link:
+                        link_urls.append(normalized_link)
                     if link_text:
                         link.replace_with(f"{link_text}\n[링크 삽입{link_counter}]")
                     else:
@@ -909,15 +989,15 @@ class NaverCrawler:
             if not result_text or len(result_text.strip()) == 0:
                 result_text = element.get_text(separator='\n', strip=True)
             
-            return result_text
+            return (result_text, image_urls, link_urls)
             
         except Exception as e:
             # 오류 발생 시 원본 텍스트 반환
             print(f"[WARN] _extract_text_with_media_markers 오류: {e}")
             try:
-                return element.get_text(separator='\n', strip=True)
+                return (element.get_text(separator='\n', strip=True), [], [])
             except:
-                return ''
+                return ('', [], [])
     
     def extract_blog_body_text(self, url: str) -> Optional[str]:
         """
@@ -930,6 +1010,23 @@ class NaverCrawler:
         Returns:
             추출된 본문 텍스트 (없으면 None)
         """
+        result = self.extract_blog_body_with_media(url)
+        return result['body_text'] if result else None
+    
+    def extract_blog_body_with_media(self, url: str) -> Optional[dict]:
+        """
+        블로그 글의 본문 텍스트와 미디어(이미지, 링크) URL을 추출합니다.
+        
+        Args:
+            url: 블로그 글 URL
+            
+        Returns:
+            {
+                'body_text': str,
+                'image_urls': List[str],
+                'link_urls': List[str]
+            } 형태의 딕셔너리 (없으면 None)
+        """
         try:
             page = self._fetch_blog_page(url)
             if not page:
@@ -939,6 +1036,10 @@ class NaverCrawler:
             soup = page['soup']
             html_text = page['html']  # 원본 HTML 텍스트도 가져오기
             body_text_parts = []
+            
+            # 마커 순서대로 수집된 이미지와 링크 URL 리스트
+            image_urls = []
+            link_urls = []
             
             # 방법 1: se-main-container 클래스를 가진 요소에서 텍스트 추출
             containers = soup.find_all(class_=lambda x: x and 'se-main-container' in str(x))
@@ -951,11 +1052,14 @@ class NaverCrawler:
                     element_classes = container.get('class', [])
                     class_str = ' '.join(element_classes) if element_classes else '없음'
                     
-                    # 전체 컨테이너를 한 번에 처리하여 이미지와 링크를 놓치지 않도록 함
-                    text = self._extract_text_with_media_markers(container)
+                    # 마커와 함께 이미지/링크 URL 수집
+                    text, extracted_images, extracted_links = self._extract_text_with_media_markers(container)
                     if text and len(text.strip()) > 0:
-                        print(f"[수집] ✓ 방법 1 성공 - 요소#{idx}: <{tag_name}> 태그, ID='{element_id}', 클래스='{class_str}', 텍스트 길이={len(text)}자")
+                        print(f"[수집] ✓ 방법 1 성공 - 요소#{idx}: <{tag_name}> 태그, ID='{element_id}', 클래스='{class_str}', 텍스트 길이={len(text)}자, 이미지 {len(extracted_images)}개, 링크 {len(extracted_links)}개")
                         body_text_parts.append(text)
+                        # 마커 순서대로 URL 추가
+                        image_urls.extend(extracted_images)
+                        link_urls.extend(extracted_links)
                         # 첫 번째 성공한 요소만 사용 (중복 방지)
                         break
             
@@ -969,10 +1073,14 @@ class NaverCrawler:
                         element_classes = div.get('class', [])
                         class_str = ' '.join(element_classes) if element_classes else '없음'
                         
-                        text = self._extract_text_with_media_markers(div)
+                        # 마커와 함께 이미지/링크 URL 수집
+                        text, extracted_images, extracted_links = self._extract_text_with_media_markers(div)
                         if text and len(text.strip()) > 0:
-                            print(f"[수집] ✓ 방법 2 성공 - 요소#{idx}: <div> 태그, ID='{element_id}', 클래스='{class_str}', 텍스트 길이={len(text)}자")
+                            print(f"[수집] ✓ 방법 2 성공 - 요소#{idx}: <div> 태그, ID='{element_id}', 클래스='{class_str}', 텍스트 길이={len(text)}자, 이미지 {len(extracted_images)}개, 링크 {len(extracted_links)}개")
                             body_text_parts.append(text)
+                            # 마커 순서대로 URL 추가
+                            image_urls.extend(extracted_images)
+                            link_urls.extend(extracted_links)
                             # 첫 번째 성공한 요소만 사용 (중복 방지)
                             break
             
@@ -994,10 +1102,14 @@ class NaverCrawler:
                             element_classes = elem.get('class', [])
                             class_str = ' '.join(element_classes) if element_classes else '없음'
                             
-                            text = self._extract_text_with_media_markers(elem)
+                            # 마커와 함께 이미지/링크 URL 수집
+                            text, extracted_images, extracted_links = self._extract_text_with_media_markers(elem)
                             if text and len(text.strip()) > 20:  # 최소 길이 체크
-                                print(f"[수집] ✓ 방법 3 성공 - {selector_name}, 요소#{idx}: <div> 태그, ID='{element_id}', 클래스='{class_str}', 텍스트 길이={len(text)}자")
+                                print(f"[수집] ✓ 방법 3 성공 - {selector_name}, 요소#{idx}: <div> 태그, ID='{element_id}', 클래스='{class_str}', 텍스트 길이={len(text)}자, 이미지 {len(extracted_images)}개, 링크 {len(extracted_links)}개")
                                 body_text_parts.append(text)
+                                # 마커 순서대로 URL 추가
+                                image_urls.extend(extracted_images)
+                                link_urls.extend(extracted_links)
                                 break
                         if body_text_parts:
                             break
@@ -1015,13 +1127,17 @@ class NaverCrawler:
                     body_classes = body.get('class', [])
                     class_str = ' '.join(body_classes) if body_classes else '없음'
                     
-                    text = self._extract_text_with_media_markers(body)
+                    # 마커와 함께 이미지/링크 URL 수집
+                    text, extracted_images, extracted_links = self._extract_text_with_media_markers(body)
                     # 너무 짧은 라인 제거
                     lines = [line.strip() for line in text.split('\n') if line.strip() and len(line.strip()) > 5]
                     if lines:
                         final_text = '\n'.join(lines)
-                        print(f"[수집] ✓ 방법 4 성공 - <body> 태그, ID='{body_id}', 클래스='{class_str}', 텍스트 길이={len(final_text)}자")
+                        print(f"[수집] ✓ 방법 4 성공 - <body> 태그, ID='{body_id}', 클래스='{class_str}', 텍스트 길이={len(final_text)}자, 이미지 {len(extracted_images)}개, 링크 {len(extracted_links)}개")
                         body_text_parts.append(final_text)
+                        # 마커 순서대로 URL 추가
+                        image_urls.extend(extracted_images)
+                        link_urls.extend(extracted_links)
                     else:
                         print(f"[수집] ✗ 방법 4 실패 - <body> 태그에서 유효한 텍스트 없음")
                 else:
@@ -1059,7 +1175,13 @@ class NaverCrawler:
                 final_text = re.sub(r'\n{3,}', '\n\n', final_text)
                 final_length = len(final_text.strip())
                 print(f"[수집] ✓ 최종 본문 텍스트 생성 완료: {final_length}자")
-                return final_text.strip()
+                print(f"[수집] ✓ 이미지 URL {len(image_urls)}개, 링크 URL {len(link_urls)}개 수집 완료")
+                
+                return {
+                    'body_text': final_text.strip(),
+                    'image_urls': image_urls,
+                    'link_urls': link_urls
+                }
             else:
                 print("[수집] ✗ 모든 방법 실패: 본문 텍스트를 찾을 수 없습니다.")
                 return None
