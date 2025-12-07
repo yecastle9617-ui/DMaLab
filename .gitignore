@@ -52,5 +52,6 @@ naver_state.json
 
 # 크롤링 결과 디렉토리
 naver_crawler/
+create_naver/
 
 

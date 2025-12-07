@@ -176,11 +176,11 @@ def get_max_tokens_for_level(blog_level: str) -> int:
     # 한글 1자 ≈ 1.5~2 토큰, JSON 구조 고려하여 여유 있게 설정
     # JSON 구조, 스타일 정보, 마크업 등을 고려하여 충분한 토큰 할당
     level_tokens = {
-        "new": 6000,      # 2000~2500자 → 약 4000~5000 토큰 + JSON 구조 여유분
-        "mid": 7000,      # 2500~3000자 → 약 5000~6000 토큰 + JSON 구조 여유분
-        "high": 9000      # 3000~3500자 이상 → 약 6000~7000 토큰 + JSON 구조 여유분
+        "new": 12000,      # 2000~2500자 → 약 4000~5000 토큰 + JSON 구조 여유분
+        "mid": 15000,      # 2500~3000자 → 약 5000~6000 토큰 + JSON 구조 여유분
+        "high": 20000      # 3000~3500자 이상 → 약 6000~7000 토큰 + JSON 구조 여유분
     }
-    return level_tokens.get(blog_level, 7000)  # 기본값: mid
+    return level_tokens.get(blog_level, 15000)  # 기본값: mid
 
 
 def generate_blog_content(

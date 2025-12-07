@@ -139,7 +139,8 @@ def generate_image(
         client = get_gemini_client()
         model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-image")
         
-        logger.info(f"[IMAGE] 이미지 생성 시작: index={image_index}, prompt_length={len(image_prompt)}")
+        logger.info(f"[IMAGE] 이미지 생성 시작: index={image_index}, prompt_length={len(image_prompt)}, model={model_name}")
+        logger.debug(f"[IMAGE] 프롬프트: {image_prompt[:200]}...")  # 프롬프트 일부만 로깅
         
         # 이미지 생성 요청
         response = client.models.generate_content(
@@ -147,32 +148,56 @@ def generate_image(
             contents=[image_prompt],
         )
         
+        # 응답 디버깅
+        logger.debug(f"[IMAGE] 응답 타입: {type(response)}")
+        logger.debug(f"[IMAGE] 응답 parts 개수: {len(response.parts) if hasattr(response, 'parts') else 'N/A'}")
+        
         # 응답에서 이미지 추출
         image_saved = False
         image_path = None
         
-        for part in response.parts:
-            if part.inline_data is not None:
+        if not hasattr(response, 'parts') or not response.parts:
+            logger.warning(f"[IMAGE] 응답에 parts가 없습니다. response: {response}")
+            # 응답 전체를 확인
+            if hasattr(response, 'text'):
+                logger.warning(f"[IMAGE] 응답 텍스트: {response.text}")
+            return None
+        
+        for i, part in enumerate(response.parts):
+            logger.debug(f"[IMAGE] Part {i}: type={type(part)}, has_inline_data={hasattr(part, 'inline_data') and part.inline_data is not None}, has_text={hasattr(part, 'text') and part.text is not None}")
+            
+            # 텍스트 응답이 있으면 로깅 (디버깅용)
+            if hasattr(part, 'text') and part.text is not None:
+                logger.info(f"[IMAGE] 텍스트 응답 수신: {part.text[:500]}...")
+            
+            # 이미지 데이터 확인 (우선순위: inline_data)
+            if hasattr(part, 'inline_data') and part.inline_data is not None:
                 logger.info(f"[IMAGE] 이미지 데이터 수신 완료: index={image_index}")
-                image = part.as_image()
-                
-                # images 디렉토리 생성
-                images_dir = output_dir / "images"
-                images_dir.mkdir(parents=True, exist_ok=True)
-                
-                # 파일명 생성
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"image_{image_index}_{timestamp}.png"
-                image_path = images_dir / filename
-                
-                # 이미지 저장
-                image.save(str(image_path))
-                logger.info(f"[IMAGE] 이미지 저장 완료: {image_path}")
-                image_saved = True
-                break
+                try:
+                    image = part.as_image()
+                    
+                    # images 디렉토리 생성
+                    images_dir = output_dir / "images"
+                    images_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # 파일명 생성
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = f"image_{image_index}_{timestamp}.png"
+                    image_path = images_dir / filename
+                    
+                    # 이미지 저장
+                    image.save(str(image_path))
+                    logger.info(f"[IMAGE] 이미지 저장 완료: {image_path}")
+                    image_saved = True
+                    break
+                except Exception as img_error:
+                    logger.error(f"[IMAGE] 이미지 처리 오류: {str(img_error)}")
+                    import traceback
+                    logger.error(traceback.format_exc())
         
         if not image_saved:
             logger.warning(f"[IMAGE] 이미지 생성 실패: index={image_index} - 응답에 이미지 데이터가 없습니다.")
+            logger.warning(f"[IMAGE] 응답 전체 정보: {response}")
             return None
         
         return image_path
