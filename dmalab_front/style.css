@@ -355,6 +355,26 @@ button:disabled {
     box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
 }
 
+/* 네이버 발행용 파일 다운로드 버튼 */
+.btn-export {
+    padding: 10px 20px;
+    background: #667eea;
+    color: white;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.95rem;
+    font-weight: 500;
+    align-self: flex-start;
+    transition: all 0.2s ease;
+}
+
+.btn-export:hover {
+    background: #5568d3;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
 .blog-editor-sections {
     display: flex;
     flex-direction: column;
@@ -383,32 +403,350 @@ button:disabled {
     font-size: 16px;
     line-height: 1.8;
     color: #333;
-    overflow-y: auto;
+    /* 에디터 전체 높이는 내용에 따라 자동으로 늘어나도록 설정 */
+    overflow-y: visible;
+    cursor: text; /* 마우스를 올리면 텍스트 입력 가능 영역처럼 보이도록 */
 }
 
-.blog-editor:focus {
+/* Quill 에디터 스타일 커스터마이징 */
+.blog-editor .ql-container {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+    font-size: 16px;
+    line-height: 1.8;
+}
+
+.blog-editor .ql-editor {
+    /* 세 에디터(제목/본문/태그)의 기본 입력 영역 스타일 */
+    min-height: 80px;
+    padding: 12px 16px;
+}
+
+.blog-editor .ql-editor.ql-blank::before {
+    font-style: normal;
+    color: #999;
+}
+
+.blog-editor:focus-within {
     outline: 2px solid #667eea;
     outline-offset: 2px;
 }
 
-.blog-editor-title {
+/* 에디터 툴바 정렬 개선 */
+.blog-editor .ql-toolbar.ql-snow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    border-radius: 6px 6px 0 0;
+    padding: 8px 10px;
+    font-size: 16px; /* 툴바 전체 글자 크기 증가 */
+}
+
+.blog-editor .ql-toolbar .ql-formats {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* 툴바 버튼/피커 크기 및 정렬 개선 */
+.blog-editor .ql-toolbar .ql-formats button,
+.blog-editor .ql-toolbar .ql-formats .ql-picker-label,
+.blog-editor .ql-toolbar .ql-formats .ql-picker-item {
+    height: 36px;
+    min-width: 36px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;           /* 텍스트/아이콘 수직 정렬 보정 */
+    box-sizing: border-box;
+    margin: 0;                /* 위아래 간격 균일하게 */
+}
+
+.blog-editor .ql-toolbar .ql-formats .ql-picker-label {
+    padding-right: 28px; /* 드롭다운 화살표 공간 확보 */
+}
+
+/* 아이콘이 위로 치우치는 현상 보정 */
+.blog-editor .ql-toolbar .ql-formats button svg,
+.blog-editor .ql-toolbar .ql-formats .ql-picker-label svg {
+    margin: 0;
+    vertical-align: middle;
+}
+
+/* Quill 기본 아이콘 두께/크기 약간 키우기 */
+.blog-editor .ql-toolbar .ql-stroke {
+    stroke-width: 1.8;
+}
+
+.blog-editor .ql-toolbar .ql-picker {
+    font-size: 15px;
+}
+
+/* Quill 사이즈 피커 레이블/옵션을 px 값으로 표시 */
+.ql-snow .ql-picker.ql-size .ql-picker-item::before {
+    content: attr(data-value) !important;
+}
+
+.ql-snow .ql-picker.ql-size .ql-picker-label::before {
+    content: attr(data-value) !important;
+}
+
+/* 네이버 에디터 기준 폰트 크기 스타일 */
+.blog-editor .ql-editor .ql-size-11px {
+    font-size: 11px;
+}
+
+.blog-editor .ql-editor .ql-size-13px {
+    font-size: 13px;
+}
+
+.blog-editor .ql-editor .ql-size-15px {
+    font-size: 15px;
+}
+
+.blog-editor .ql-editor .ql-size-16px {
+    font-size: 16px;
+}
+
+.blog-editor .ql-editor .ql-size-19px {
+    font-size: 19px;
+}
+
+.blog-editor .ql-editor .ql-size-24px {
+    font-size: 24px;
+}
+
+.blog-editor .ql-editor .ql-size-28px {
+    font-size: 28px;
+}
+
+.blog-editor .ql-editor .ql-size-30px {
+    font-size: 30px;
+}
+
+.blog-editor .ql-editor .ql-size-34px {
+    font-size: 34px;
+}
+
+.blog-editor .ql-editor .ql-size-38px {
+    font-size: 38px;
+}
+
+/* 커스텀 스타일 드롭다운 */
+.blog-editor .ql-toolbar .ql-style-custom {
+    display: inline-block !important;
+    width: 120px;
+    padding: 2px 6px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 13px;
+    height: 28px;
+    background: #fff;
+    color: #333;
+}
+
+/* 임시 저장 복원 여부 팝업 */
+.autosave-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 3000;
+}
+
+.autosave-modal {
+    background: #fff;
+    border-radius: 10px;
+    padding: 20px 24px;
+    max-width: 360px;
+    width: 90%;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+}
+
+.autosave-modal-title {
+    margin: 0 0 10px;
+    font-size: 16px;
+    font-weight: 700;
+    color: #222;
+}
+
+.autosave-modal-message {
+    margin: 0 0 16px;
+    font-size: 13px;
+    color: #555;
+    line-height: 1.6;
+}
+
+.autosave-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.autosave-btn-primary,
+.autosave-btn-secondary {
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    border: 1px solid transparent;
+}
+
+.autosave-btn-primary {
+    background: #667eea;
+    color: #fff;
+    border-color: #667eea;
+}
+
+.autosave-btn-primary:hover {
+    background: #5568d3;
+}
+
+.autosave-btn-secondary {
+    background: #f5f5f5;
+    color: #333;
+    border-color: #ddd;
+}
+
+.autosave-btn-secondary:hover {
+    background: #e9e9e9;
+}
+
+/* 에디터 내 이미지 스타일 표시용 툴바 (오버레이) */
+.image-style-toolbar-overlay {
+    position: absolute;
+    z-index: 2000;
+    padding: 4px 8px;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.image-style-toolbar {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    color: #444;
+}
+
+.image-style-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.blog-editor .image-style-toolbar .image-style-label {
+    font-weight: 500;
+    margin-right: 2px;
+}
+
+.blog-editor .image-style-toolbar button {
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid #ccc;
+    background: #f5f5f5;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.blog-editor .image-style-toolbar button.active {
+    border-color: #667eea;
+    background: #e3e7ff;
+    color: #333;
+}
+
+.image-caption-row {
+    display: flex;
+    align-items: center;
+}
+
+.image-caption-input {
+    width: 100%;
+    padding: 3px 6px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+    font-size: 11px;
+    box-sizing: border-box;
+}
+
+/* 이미지 스타일별 시각적 구분 */
+.blog-editor img.img-style-ai {
+    border: 2px solid #4caf50;
+    box-shadow: 0 0 4px rgba(76, 175, 80, 0.5);
+}
+
+.blog-editor img.img-style-thumbnail {
+    border: 2px solid #ff9800;
+    box-shadow: 0 0 4px rgba(255, 152, 0, 0.5);
+}
+
+.blog-editor img.img-style-body {
+    border: 1px solid #ddd;
+}
+
+/* 제목/본문/태그 에디터 공통: 실제 입력 영역(ql-editor)을 기준으로 스타일 정리 */
+
+.blog-editor .image-style-toolbar .image-style-label {
+    font-weight: 500;
+    margin-right: 2px;
+}
+
+.blog-editor .image-style-toolbar button {
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid #ccc;
+    background: #f5f5f5;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.blog-editor .image-style-toolbar button.active {
+    border-color: #667eea;
+    background: #e3e7ff;
+    color: #333;
+}
+
+/* 이미지 스타일별 시각적 구분 */
+.blog-editor img.img-style-ai {
+    border: 2px solid #4caf50;
+    box-shadow: 0 0 4px rgba(76, 175, 80, 0.5);
+}
+
+.blog-editor img.img-style-thumbnail {
+    border: 2px solid #ff9800;
+    box-shadow: 0 0 4px rgba(255, 152, 0, 0.5);
+}
+
+.blog-editor img.img-style-body {
+    border: 1px solid #ddd;
+}
+
+
+.blog-editor-title .ql-editor {
     min-height: 80px;
-    max-height: 150px;
+    padding: 12px 16px;
     font-size: 26px;
     font-weight: bold;
 }
 
-.blog-editor-body {
+.blog-editor-body .ql-editor {
     min-height: 500px;
-    max-height: 800px;
+    padding: 16px 20px;
 }
 
-.blog-editor-tags {
+.blog-editor-tags .ql-editor {
     min-height: 60px;
-    max-height: 120px;
+    padding: 8px 12px;
     font-size: 14px;
     line-height: 2;
-    /* 태그는 순수 텍스트로만 표시되므로 스타일은 에디터 자체에만 적용 */
 }
 
 .blog-editor h1,
@@ -427,6 +765,13 @@ button:disabled {
 .blog-editor h2 {
     font-size: 20px;
     font-weight: bold;
+}
+
+/* Quill 에디터 내부 헤더도 굵게 보이도록 강제 (subtitle용) */
+.blog-editor .ql-editor h1,
+.blog-editor .ql-editor h2,
+.blog-editor .ql-editor h3 {
+    font-weight: 700 !important;
 }
 
 .blog-editor p {

@@ -20,10 +20,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 import requests
+import zipfile
+import base64
+import mimetypes
 
 from crawler.naver_crawler import NaverCrawler
 from analyzer.morpheme_analyzer import MorphemeAnalyzer
-from blog.gpt_generator import generate_blog_content, save_blog_json
+from blog.gpt_generator import (
+    generate_blog_content,
+    save_blog_json,
+    get_create_naver_directory,
+    generate_blog_ideas,
+)
 
 # 로거 설정
 logger = logging.getLogger("dmalab.api")
@@ -49,15 +57,22 @@ project_dir = current_dir.parent
 NAVER_CRAWLER_DIR = project_dir / "naver_crawler"
 NAVER_CRAWLER_DIR.mkdir(parents=True, exist_ok=True)
 
-# blog/create_naver 디렉토리 설정
+# blog/create_naver 디렉토리 설정 (GPT 자동 생성용)
 CREATE_NAVER_DIR = project_dir / "blog" / "create_naver"
 CREATE_NAVER_DIR.mkdir(parents=True, exist_ok=True)
+
+# blog/export_blog 디렉토리 설정 (에디터 역포맷/내보내기용)
+EXPORT_BLOG_DIR = project_dir / "blog" / "export_blog"
+EXPORT_BLOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # 정적 파일 서빙 (naver_crawler 디렉토리 전체)
 app.mount("/static/naver_crawler", StaticFiles(directory=str(NAVER_CRAWLER_DIR)), name="static_naver_crawler")
 
 # 정적 파일 서빙 (blog/create_naver 디렉토리 전체)
 app.mount("/static/blog/create_naver", StaticFiles(directory=str(CREATE_NAVER_DIR)), name="static_create_naver")
+
+# 정적 파일 서빙 (blog/export_blog 디렉토리 전체)
+app.mount("/static/blog/export_blog", StaticFiles(directory=str(EXPORT_BLOG_DIR)), name="static_export_blog")
 
 # CORS 설정 (필요시 수정)
 app.add_middleware(
@@ -221,6 +236,83 @@ class GenerateBlogResponse(BaseModel):
     blog_content: Optional[Dict[str, Any]] = None
     json_path: Optional[str] = None
     error: Optional[str] = None
+    image_retry_count: Optional[int] = None
+
+
+class ExportImageItem(BaseModel):
+    """에디터에서 추출된 이미지 정보"""
+    index: int
+    src: str
+    style: Optional[str] = None
+    caption: Optional[str] = None
+
+
+class ExportBlogRequest(BaseModel):
+    """에디터 내용을 기반으로 네이버 발행용 파일을 생성하는 요청 모델"""
+    blog_content: Dict[str, Any]
+    images: List[ExportImageItem]
+
+
+class ExportBlogResponse(BaseModel):
+    success: bool
+    zip_path: Optional[str] = None
+    error: Optional[str] = None
+
+
+class GenerateBlogIdeasRequest(BaseModel):
+    """블로그 제목/프롬프트 아이디어 생성 요청 모델"""
+    keyword: str = Field(..., description="대표 키워드")
+    topic: str = Field(..., description="글의 주제/카테고리")
+    blog_profile: str = Field(..., description="현재 내 블로그의 특징(톤, 타깃, 운영 스타일 등)")
+    extra_prompt: Optional[str] = Field(default=None, description="추가로 강조하고 싶은 프롬프트 내용 (선택)")
+    count: int = Field(default=3, ge=1, le=10, description="생성할 아이디어 개수 (1~10)")
+    model: str = Field(default="gpt-4o-mini", description="사용할 GPT 모델")
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="생성 온도")
+    save_files: bool = Field(default=True, description="각 아이디어를 개별 텍스트 파일로 저장할지 여부")
+
+
+class BlogIdeaItem(BaseModel):
+    """단일 블로그 제목/프롬프트 아이디어"""
+    index: int
+    title: str
+    prompt: str
+    file_path: Optional[str] = None
+
+
+class GenerateBlogIdeasResponse(BaseModel):
+    """블로그 제목/프롬프트 아이디어 생성 응답 모델"""
+    success: bool
+    ideas: List[BlogIdeaItem] = []
+    zip_path: Optional[str] = None
+    error: Optional[str] = None
+
+
+class GenerateBlogIdeasRequest(BaseModel):
+    """블로그 제목/프롬프트 아이디어 생성 요청 모델"""
+    keyword: str = Field(..., description="대표 키워드")
+    topic: str = Field(..., description="글의 주제/카테고리")
+    blog_profile: str = Field(..., description="현재 내 블로그의 특징(톤, 타깃, 운영 스타일 등)")
+    extra_prompt: Optional[str] = Field(default=None, description="추가로 강조하고 싶은 프롬프트 내용 (선택)")
+    count: int = Field(default=3, ge=1, le=10, description="생성할 아이디어 개수 (1~10)")
+    model: str = Field(default="gpt-4o-mini", description="사용할 GPT 모델")
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="생성 온도")
+    save_files: bool = Field(default=True, description="각 아이디어를 개별 텍스트 파일로 저장할지 여부")
+
+
+class BlogIdeaItem(BaseModel):
+    """단일 블로그 제목/프롬프트 아이디어"""
+    index: int
+    title: str
+    prompt: str
+    file_path: Optional[str] = None
+
+
+class GenerateBlogIdeasResponse(BaseModel):
+    """블로그 제목/프롬프트 아이디어 생성 응답 모델"""
+    success: bool
+    ideas: List[BlogIdeaItem] = []
+    zip_path: Optional[str] = None
+    error: Optional[str] = None
 
 
 # ===== 유틸리티 함수 =====
@@ -260,6 +352,57 @@ def get_output_directory(count: int = 10):
         top_dir = os.path.join(output_dir, f"TOP{rank}")
         os.makedirs(top_dir, exist_ok=True)
     
+    return output_dir
+
+
+def slugify_filename(text: str, max_length: int = 50) -> str:
+    """
+    파일명에 사용할 수 있도록 텍스트를 슬러그 형태로 변환합니다.
+    - 공백은 언더스코어로 변환
+    - 위험 문자는 제거
+    - 너무 길면 max_length 이내로 자름
+    """
+    if not text:
+        return ""
+    # 공백 → _
+    text = text.strip().replace(" ", "_")
+    # 위험 문자 제거
+    forbidden = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
+    for ch in forbidden:
+        text = text.replace(ch, '')
+    # 길이 제한
+    if len(text) > max_length:
+        text = text[:max_length]
+    return text
+
+
+def get_export_blog_directory() -> Path:
+    """
+    blog/export_blog 디렉토리 내에 날짜별 번호 디렉토리를 생성합니다.
+    형식: blog/export_blog/yyyymmdd_1, yyyymmdd_2, ...
+    """
+    base_dir = EXPORT_BLOG_DIR
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    today = datetime.now().strftime("%Y%m%d")
+    dir_pattern = f"{today}_"
+    existing_dirs = [
+        d for d in base_dir.iterdir()
+        if d.is_dir() and d.name.startswith(dir_pattern)
+    ]
+
+    max_num = 0
+    for dir_path in existing_dirs:
+        try:
+            num = int(dir_path.name.split('_')[-1])
+            max_num = max(max_num, num)
+        except (ValueError, IndexError):
+            continue
+
+    next_num = max_num + 1
+    output_dir = base_dir / f"{today}_{next_num}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     return output_dir
 
 
@@ -1050,33 +1193,48 @@ async def generate_blog(request: GenerateBlogRequest):
             
             # 각 이미지 플레이스홀더에 대해 이미지 생성
             generated_images = []
+            image_retry_count = 0
             for img_placeholder in image_placeholders:
-                try:
-                    image_prompt = build_image_prompt(img_placeholder["image_prompt"])
-                    image_path = generate_image(
-                        image_prompt=image_prompt,
-                        output_dir=output_dir,
-                        image_index=img_placeholder["index"]
-                    )
-                    
-                    if image_path:
-                        # 상대 경로로 변환 (프론트엔드에서 접근 가능하도록)
-                        # output_dir는 blog/create_naver/yyyymmdd_N 형식
-                        # CREATE_NAVER_DIR 기준으로 상대 경로 계산 (날짜 디렉토리 포함)
-                        relative_to_base = image_path.relative_to(CREATE_NAVER_DIR)
-                        # Windows 경로 구분자를 슬래시로 변환
-                        relative_path = str(relative_to_base).replace('\\', '/')
-                        generated_images.append({
-                            "index": img_placeholder["index"],
-                            "placeholder": img_placeholder["placeholder"],
-                            "image_path": relative_path,
-                            "full_path": str(image_path)
-                        })
-                        logger.info(f"[GENERATE] 이미지 생성 완료: {relative_path}")
-                    else:
-                        logger.warning(f"[GENERATE] 이미지 생성 실패: index={img_placeholder['index']}")
-                except Exception as e:
-                    logger.error(f"[GENERATE] 이미지 생성 오류: index={img_placeholder['index']}, error={str(e)}")
+                attempts = 0
+                image_path = None
+                while attempts < 3 and image_path is None:
+                    attempts += 1
+                    try:
+                        image_prompt = build_image_prompt(img_placeholder["image_prompt"])
+                        image_path = generate_image(
+                            image_prompt=image_prompt,
+                            output_dir=output_dir,
+                            image_index=img_placeholder["index"]
+                        )
+                        
+                        if image_path:
+                            # 상대 경로로 변환 (프론트엔드에서 접근 가능하도록)
+                            # output_dir는 blog/create_naver/yyyymmdd_N 형식
+                            # CREATE_NAVER_DIR 기준으로 상대 경로 계산 (날짜 디렉토리 포함)
+                            relative_to_base = image_path.relative_to(CREATE_NAVER_DIR)
+                            # Windows 경로 구분자를 슬래시로 변환
+                            relative_path = str(relative_to_base).replace('\\', '/')
+                            generated_images.append({
+                                "index": img_placeholder["index"],
+                                "placeholder": img_placeholder["placeholder"],
+                                "image_path": relative_path,
+                                "full_path": str(image_path)
+                            })
+                            logger.info(f"[GENERATE] 이미지 생성 완료: {relative_path}")
+                        else:
+                            logger.warning(
+                                f"[GENERATE] 이미지 생성 실패: index={img_placeholder['index']}, "
+                                f"attempt={attempts}"
+                            )
+                            if attempts < 3:
+                                image_retry_count += 1
+                    except Exception as e:
+                        logger.error(
+                            f"[GENERATE] 이미지 생성 오류: index={img_placeholder['index']}, "
+                            f"attempt={attempts}, error={str(e)}"
+                        )
+                        if attempts < 3:
+                            image_retry_count += 1
             
             # 생성된 이미지 정보를 blog_content에 추가
             if generated_images:
@@ -1100,7 +1258,8 @@ async def generate_blog(request: GenerateBlogRequest):
         return GenerateBlogResponse(
             success=True,
             blog_content=blog_content,
-            json_path=json_path
+            json_path=json_path,
+            image_retry_count=image_retry_count if image_placeholders and request.generate_images else 0
         )
         
     except ValueError as e:
@@ -1113,6 +1272,308 @@ async def generate_blog(request: GenerateBlogRequest):
         return GenerateBlogResponse(
             success=False,
             error=f"블로그 생성 중 오류 발생: {str(e)}"
+        )
+
+
+@app.post("/api/export-blog", response_model=ExportBlogResponse)
+async def export_blog(request: ExportBlogRequest):
+    """
+    에디터에서 작성한 내용을 기반으로 네이버 발행용 JSON + 이미지 패키지를 생성하고
+    ZIP 파일 경로를 반환합니다.
+    """
+    try:
+        blog_content = request.blog_content
+        images = request.images or []
+
+        # blog/export_blog/yyyymmdd_N 디렉토리 생성 (에디터 내보내기 전용)
+        output_dir = get_export_blog_directory()
+        images_dir = output_dir / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+
+        # 이미지 저장 및 generated_images 구성
+        generated_images = []
+        for img in images:
+            src = img.src or ""
+            if not src:
+                continue
+
+            # 파일명 생성
+            caption_slug = slugify_filename(img.caption or "")
+            base_name = f"img{img.index}"
+            if caption_slug:
+                base_name = f"{base_name}_{caption_slug}"
+
+            # 확장자 결정
+            ext = "jpg"
+            mime = None
+
+            # data URL (base64)
+            if src.startswith("data:"):
+                # data:image/png;base64,xxxx
+                try:
+                    header, b64data = src.split(",", 1)
+                    if header.startswith("data:") and ";base64" in header:
+                        mime = header[5:header.index(";base64")]
+                        guessed_ext = mimetypes.guess_extension(mime) or ""
+                        if guessed_ext:
+                            ext = guessed_ext.lstrip(".")
+                        image_bytes = base64.b64decode(b64data)
+                        filename = f"{base_name}.{ext}"
+                        file_path = images_dir / filename
+                        with open(file_path, "wb") as f:
+                            f.write(image_bytes)
+                    else:
+                        continue
+                except Exception as e:
+                    logger.error(f"[EXPORT] data URL 이미지 처리 실패: index={img.index}, error={str(e)}")
+                    continue
+
+            # /static/blog/create_naver/... 형식 (기존 생성 이미지 복사)
+            elif src.startswith("/static/blog/create_naver/") or urlparse(src).path.startswith("/static/blog/create_naver/"):
+                # 절대 URL인 경우 path 부분만 사용
+                path = urlparse(src).path
+                if path.startswith("/static/blog/create_naver/"):
+                    relative = path[len("/static/blog/create_naver/"):]
+                else:
+                    relative = src[len("/static/blog/create_naver/"):]
+                src_path = CREATE_NAVER_DIR / Path(unquote(relative))
+                if not src_path.exists():
+                    logger.warning(f"[EXPORT] 원본 이미지 파일을 찾을 수 없음: {src_path}")
+                    continue
+                # 확장자
+                ext = src_path.suffix.lstrip(".") or "jpg"
+                filename = f"{base_name}.{ext}"
+                file_path = images_dir / filename
+                try:
+                    with open(src_path, "rb") as rf, open(file_path, "wb") as wf:
+                        wf.write(rf.read())
+                except Exception as e:
+                    logger.error(f"[EXPORT] 이미지 복사 실패: src={src_path}, error={str(e)}")
+                    continue
+
+            # http/https URL
+            elif src.startswith("http://") or src.startswith("https://"):
+                try:
+                    resp = requests.get(src, timeout=10)
+                    if resp.status_code != 200:
+                        logger.warning(f"[EXPORT] 이미지 다운로드 실패: url={src}, status={resp.status_code}")
+                        continue
+                    mime = resp.headers.get("Content-Type", "")
+                    guessed_ext = mimetypes.guess_extension(mime) or ""
+                    if guessed_ext:
+                        ext = guessed_ext.lstrip(".")
+                    else:
+                        # URL에서 확장자 추정
+                        url_path = urlparse(src).path
+                        url_ext = os.path.splitext(url_path)[1].lstrip(".")
+                        if url_ext:
+                            ext = url_ext
+                    filename = f"{base_name}.{ext}"
+                    file_path = images_dir / filename
+                    with open(file_path, "wb") as f:
+                        f.write(resp.content)
+                except Exception as e:
+                    logger.error(f"[EXPORT] 이미지 다운로드 실패: url={src}, error={str(e)}")
+                    continue
+
+            else:
+                # 알 수 없는 형식은 스킵
+                logger.warning(f"[EXPORT] 지원하지 않는 이미지 src 형식: {src}")
+                continue
+
+            # EXPORT_BLOG_DIR 기준 상대 경로 계산
+            try:
+                relative_to_base = file_path.relative_to(EXPORT_BLOG_DIR)
+            except ValueError:
+                # 만약 output_dir가 EXPORT_BLOG_DIR 하위가 아닌 경우 대비
+                relative_to_base = file_path
+            relative_path = str(relative_to_base).replace("\\", "/")
+
+            generated_images.append({
+                "index": img.index,
+                "placeholder": img.caption or "",
+                "image_path": relative_path,
+                "full_path": str(file_path)
+            })
+
+        if generated_images:
+            blog_content["generated_images"] = generated_images
+
+        # JSON 파일 저장 (export 용 이름)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        json_filename = f"blog_export_{timestamp}.json"
+        json_path = save_blog_json(blog_content, output_dir=str(output_dir), filename=json_filename)
+        logger.info(f"[EXPORT] export json saved: {json_path}")
+
+        # ZIP 파일 생성 (output_dir 전체를 압축)
+        zip_filename = f"{output_dir.name}.zip"
+        zip_path = output_dir.parent / zip_filename
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(output_dir):
+                for file in files:
+                    full_path = Path(root) / file
+                    # ZIP 안에서는 output_dir 기준 상대 경로로 저장
+                    arcname = str(full_path.relative_to(output_dir)).replace("\\", "/")
+                    zf.write(full_path, arcname)
+
+        # 클라이언트에 제공할 정적 ZIP 경로 (/static/blog/export_blog/...)
+        try:
+            relative_zip = zip_path.relative_to(EXPORT_BLOG_DIR)
+            zip_relative_path = str(relative_zip).replace("\\", "/")
+            zip_url_path = f"/static/blog/export_blog/{zip_relative_path}"
+        except ValueError:
+            # fallback: 절대 경로 그대로 전달 (프론트에서 직접 사용할 경우)
+            zip_url_path = str(zip_path)
+
+        return ExportBlogResponse(
+            success=True,
+            zip_path=zip_url_path
+        )
+    except Exception as e:
+        logger.error(f"[EXPORT] export-blog 처리 중 오류: {str(e)}")
+        return ExportBlogResponse(
+            success=False,
+            error=f"export-blog 처리 중 오류: {str(e)}"
+        )
+
+
+@app.post("/api/generate-blog-ideas", response_model=GenerateBlogIdeasResponse)
+async def generate_blog_ideas_api(request: GenerateBlogIdeasRequest):
+    """
+    GPT API를 사용하여 블로그 제목과 작성 프롬프트 아이디어를 여러 개 생성합니다.
+
+    - **keyword**: 대표 키워드
+    - **topic**: 글의 주제/카테고리 느낌
+    - **blog_profile**: 현재 내 블로그의 특징(톤, 타깃, 운영 스타일 등)
+    - **extra_prompt**: 추가로 강조하고 싶은 조건/설명 (선택)
+    - **count**: 생성할 아이디어 개수 (1~10)
+    """
+    try:
+        keyword = request.keyword.strip()
+        topic = request.topic.strip()
+        blog_profile = request.blog_profile.strip()
+
+        if not keyword:
+            raise ValueError("대표 키워드를 입력해 주세요.")
+        if not topic:
+            raise ValueError("주제를 입력해 주세요.")
+        if not blog_profile:
+            raise ValueError("내 블로그의 특징을 입력해 주세요.")
+
+        # 안전하게 개수 보정
+        count = max(1, min(10, request.count))
+
+        logger.info(
+            f"[IDEAS] keyword={keyword!r}, topic={topic!r}, "
+            f"count={count}, model={request.model!r}, temperature={request.temperature}"
+        )
+
+        # 1) GPT로 아이디어 생성
+        ideas_data = generate_blog_ideas(
+            keyword=keyword,
+            topic=topic,
+            blog_profile=blog_profile,
+            extra_prompt=request.extra_prompt,
+            count=count,
+            model=request.model,
+            temperature=request.temperature,
+        )
+
+        if not ideas_data:
+            return GenerateBlogIdeasResponse(
+                success=False,
+                ideas=[],
+                error="생성된 아이디어가 없습니다. 입력값을 조금 더 구체적으로 조정해 보세요.",
+            )
+
+        idea_items: List[BlogIdeaItem] = []
+        zip_url_path: Optional[str] = None
+
+        # 2) 파일 저장 및 ZIP 생성 (save_files=True인 경우)
+        if request.save_files:
+            output_dir = get_export_blog_directory()
+
+            for idx, idea in enumerate(ideas_data, start=1):
+                title = idea.get("title", "").strip()
+                prompt_text = idea.get("prompt", "").strip()
+
+                # 파일명: 인덱스 + 슬러그화된 제목 일부
+                base_name = f"idea_{idx:02d}"
+                safe_title = slugify_filename(title, max_length=40) or f"{idx:02d}"
+                filename = f"{base_name}_{safe_title}.txt"
+
+                file_path = output_dir / filename
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(f"제목: {title}\\n\\n")
+                    f.write("작성 프롬프트:\\n")
+                    f.write(prompt_text)
+                    f.write("\\n")
+
+                # 정적 서빙용 상대 경로 (/static/blog/export_blog/...)
+                try:
+                    relative_to_base = file_path.relative_to(EXPORT_BLOG_DIR)
+                    relative_path = str(relative_to_base).replace("\\\\", "/")
+                    static_path = f"/static/blog/export_blog/{relative_path}"
+                except ValueError:
+                    static_path = str(file_path)
+
+                idea_items.append(
+                    BlogIdeaItem(
+                        index=idx,
+                        title=title,
+                        prompt=prompt_text,
+                        file_path=static_path,
+                    )
+                )
+
+            # 디렉토리 전체를 ZIP으로 압축
+            zip_filename = f"{output_dir.name}.zip"
+            zip_path = output_dir.parent / zip_filename
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for root, dirs, files in os.walk(output_dir):
+                    for file in files:
+                        full_path = Path(root) / file
+                        arcname = str(full_path.relative_to(output_dir)).replace("\\\\", "/")
+                        zf.write(full_path, arcname)
+
+            # 정적 ZIP 경로 구성
+            try:
+                relative_zip = zip_path.relative_to(EXPORT_BLOG_DIR)
+                zip_relative_path = str(relative_zip).replace("\\\\", "/")
+                zip_url_path = f"/static/blog/export_blog/{zip_relative_path}"
+            except ValueError:
+                zip_url_path = str(zip_path)
+
+        else:
+            # 파일 저장 없이 메모리 내 결과만 반환
+            for idx, idea in enumerate(ideas_data, start=1):
+                idea_items.append(
+                    BlogIdeaItem(
+                        index=idx,
+                        title=idea.get("title", "").strip(),
+                        prompt=idea.get("prompt", "").strip(),
+                        file_path=None,
+                    )
+                )
+
+        return GenerateBlogIdeasResponse(
+            success=True,
+            ideas=idea_items,
+            zip_path=zip_url_path,
+        )
+
+    except ValueError as e:
+        return GenerateBlogIdeasResponse(
+            success=False,
+            ideas=[],
+            error=f"입력값 오류: {str(e)}",
+        )
+    except Exception as e:
+        logger.exception(f"[IDEAS] error: {e}")
+        return GenerateBlogIdeasResponse(
+            success=False,
+            ideas=[],
+            error=f"아이디어 생성 중 오류 발생: {str(e)}",
         )
 
 

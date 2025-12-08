@@ -379,6 +379,110 @@ def save_blog_json(
     return str(filepath)
 
 
+def generate_blog_ideas(
+    keyword: str,
+    topic: str,
+    blog_profile: str,
+    extra_prompt: Optional[str] = None,
+    count: int = 3,
+    model: str = "gpt-4o-mini",
+    temperature: float = 0.7,
+) -> List[Dict[str, str]]:
+    """
+    GPT API를 사용하여 블로그 제목과 작성 프롬프트 아이디어를 여러 개 생성합니다.
+
+    Args:
+        keyword: 대표 키워드
+        topic: 글의 주제/카테고리 느낌
+        blog_profile: 현재 내 블로그의 특징(톤, 타깃, 운영 스타일 등)
+        extra_prompt: 추가로 강조하고 싶은 조건/설명 (선택)
+        count: 생성할 아이디어 개수 (1~10)
+        model: 사용할 GPT 모델
+        temperature: 생성 온도
+
+    Returns:
+        {"title": str, "prompt": str} 딕셔너리 리스트
+    """
+    # 개수 제한
+    if count < 1:
+        count = 1
+    if count > 10:
+        count = 10
+
+    client = get_openai_client()
+
+    system_prompt = (
+        "너는 네이버 블로그 마케터이자 컨설턴트야. "
+        "사용자가 준 대표 키워드, 주제, 블로그 특징을 보고, "
+        "실제 블로그 글을 쓸 때 바로 사용할 수 있는 '제목'과 "
+        "'작성 지시 프롬프트'를 여러 개 제안해 줘.\n\n"
+        "- 제목은 클릭을 유도하지만 과도한 낚시는 피하고, 네이버 블로그에 자연스러운 한국어로 작성해.\n"
+        "- 작성 프롬프트는 ChatGPT/GPT에게 그대로 붙여넣어 쓰기 좋은 형태로, "
+        "톤, 타깃, 구성(도입-본문-결론), SEO 관점에서의 키워드 사용 지침 등을 구체적으로 포함해.\n"
+        "- 모든 내용은 한국어로 작성해."
+    )
+
+    user_prompt_parts = [
+        f"- 대표 키워드: {keyword}",
+        f"- 주제: {topic}",
+        f"- 내 블로그 특징: {blog_profile}",
+        f"- 생성 개수: {count}개",
+    ]
+    if extra_prompt:
+        user_prompt_parts.append(f"- 추가 요청 사항: {extra_prompt}")
+
+    user_prompt = (
+        "다음 정보를 바탕으로 블로그 제목/프롬프트 아이디어를 만들어줘.\n\n"
+        + "\n".join(user_prompt_parts)
+        + "\n\n"
+        "출력 형식은 반드시 다음 JSON 스키마를 지켜줘.\n"
+        "{\n"
+        '  "ideas": [\n'
+        "    {\n"
+        '      "title": "블로그 글 제목",\n'
+        '      "prompt": "해당 글을 작성할 때 사용할 자세한 지시 프롬프트"\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        f'"ideas" 배열 길이는 반드시 {count}로 맞춰 줘.'
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=temperature,
+            response_format={"type": "json_object"},
+        )
+
+        content = response.choices[0].message.content
+        data = json.loads(content)
+        ideas = data.get("ideas", [])
+
+        # 기본적인 검증 및 정리
+        cleaned_ideas: List[Dict[str, str]] = []
+        for item in ideas:
+            title = str(item.get("title", "")).strip()
+            prompt_text = str(item.get("prompt", "")).strip()
+            if not title or not prompt_text:
+                continue
+            cleaned_ideas.append({"title": title, "prompt": prompt_text})
+
+        # 개수 보정 (모델이 적게/많게 줄 수 있으므로 앞에서부터 자르기)
+        if len(cleaned_ideas) > count:
+            cleaned_ideas = cleaned_ideas[:count]
+
+        return cleaned_ideas
+
+    except json.JSONDecodeError as e:
+        raise ValueError(f"GPT 응답을 JSON으로 파싱할 수 없습니다: {str(e)}")
+    except Exception as e:
+        raise Exception(f"GPT API 호출 중 오류 발생: {str(e)}")
+
+
 if __name__ == "__main__":
     # 테스트 코드
     try:

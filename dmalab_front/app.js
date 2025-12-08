@@ -241,6 +241,10 @@ function initCategorySelector() {
             initCategorySelector();
             initExternalLinksUI();
             initReferenceBlogsUI();
+            // 에디터 초기화 (항상 보이도록)
+            initializeQuillEditors();
+            // 임시 저장된 내용이 있으면 복원 여부를 사용자에게 물어봄
+            showRestoreDraftModalIfNeeded();
         });
     } else {
         // DOM이 이미 로드된 경우 즉시 실행
@@ -248,6 +252,10 @@ function initCategorySelector() {
             initCategorySelector();
             initExternalLinksUI();
             initReferenceBlogsUI();
+            // 에디터 초기화 (항상 보이도록)
+            initializeQuillEditors();
+            // 임시 저장된 내용이 있으면 복원 여부를 사용자에게 물어봄
+            showRestoreDraftModalIfNeeded();
         }, 100); // 약간의 지연으로 DOM이 완전히 준비되도록
     }
 })();
@@ -304,7 +312,6 @@ function showLoading(message = '처리 중...') {
         }
     }
     document.getElementById('error').style.display = 'none';
-    document.getElementById('result').style.display = 'none';
 }
 
 function updateLoadingStep(step, status = 'pending') {
@@ -349,6 +356,11 @@ function hideLoading() {
     if (loadingDiv) {
         loadingDiv.style.display = 'none';
     }
+    // 로딩이 끝나면 결과 영역(에디터)을 다시 표시
+    const resultDiv = document.getElementById('result');
+    if (resultDiv) {
+        resultDiv.style.display = 'block';
+    }
 }
 
 // 에러 표시
@@ -362,27 +374,35 @@ function showResult(data, type = 'default') {
     const resultDiv = document.getElementById('result');
     const resultContent = document.getElementById('result-content');
     
-    resultDiv.style.display = 'block';
+    // 결과를 표시할 때는 항상 에디터 영역을 보이도록 설정
+    if (resultDiv) {
+        resultDiv.style.display = 'block';
+    }
     
     // 타입에 따라 다른 렌더링
-    switch(type) {
-        case 'process':
+    switch (type) {
+        case 'process': {
             if (resultContent) {
-            resultContent.innerHTML = renderProcessResult(data);
+                resultContent.innerHTML = renderProcessResult(data);
             }
             break;
-        case 'generate':
+        }
+        case 'generate': {
             // 제목, 본문, 태그로 분리된 에디터에 렌더링
-            renderBlogContentSeparated(data.blog_content || data);
+            const content = data.blog_content || data;
+            renderBlogContentSeparated(content);
             // 현재 블로그 콘텐츠 저장 (복사 기능용)
-            window.currentBlogContent = data.blog_content || data;
+            window.currentBlogContent = content;
             break;
-        default:
+        }
+        default: {
             // JSON 표시는 pre 태그 사용
             if (resultContent) {
-            resultContent.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+                resultContent.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+            }
+            break;
+        }
     }
-}
 }
 
 // 전체 처리 결과 렌더링
@@ -704,6 +724,14 @@ async function handleGenerateBlog() {
             throw new Error(data.error || '블로그 생성 실패');
         }
 
+        // 이미지 재시도 정보가 있는 경우 표시
+        if (generateImages && typeof data.image_retry_count === 'number' && data.image_retry_count > 0) {
+            updateLoadingStep('이미지 생성 재시도 중입니다...', 'processing');
+            setTimeout(() => {
+                updateLoadingStep('이미지 생성 재시도 중입니다...', 'completed');
+            }, 500);
+        }
+
         // 이미지 생성 단계 표시 (체크박스가 활성화된 경우만)
         if (generateImages && data.blog_content && data.blog_content.generated_images && data.blog_content.generated_images.length > 0) {
             const imageCount = data.blog_content.generated_images.length;
@@ -745,6 +773,226 @@ async function handleGenerateBlog() {
     } catch (error) {
         showError(error.message);
         hideLoading();
+    }
+}
+
+// 블로그 아이디어 생성
+async function handleGenerateIdeas() {
+    const keyword = document.getElementById('ideas-keyword').value.trim();
+    const topic = document.getElementById('ideas-topic').value.trim();
+    const blogProfile = document.getElementById('ideas-blog-profile').value.trim();
+    const extraPrompt = document.getElementById('ideas-extra-prompt').value.trim();
+    let count = parseInt(document.getElementById('ideas-count').value || '3', 10);
+
+    // 기본 검증
+    if (!keyword) {
+        alert('대표 키워드를 입력하세요.');
+        document.getElementById('ideas-keyword').focus();
+        return;
+    }
+
+    if (keyword.length > 100) {
+        alert('대표 키워드는 100자 이하여야 합니다.');
+        document.getElementById('ideas-keyword').focus();
+        return;
+    }
+
+    if (!topic) {
+        alert('주제를 입력하세요.');
+        document.getElementById('ideas-topic').focus();
+        return;
+    }
+
+    if (!blogProfile) {
+        alert('내 블로그의 특징을 입력하세요.');
+        document.getElementById('ideas-blog-profile').focus();
+        return;
+    }
+
+    if (Number.isNaN(count)) count = 3;
+    count = Math.min(10, Math.max(1, count));
+
+    showIdeasLoading('아이디어 생성 중...');
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/generate-blog-ideas`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                keyword: keyword,
+                topic: topic,
+                blog_profile: blogProfile,
+                extra_prompt: extraPrompt || null,
+                count: count,
+                save_files: true
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || '아이디어 생성에 실패했습니다.');
+        }
+
+        renderIdeasResult(data);
+    } catch (error) {
+        console.error(error);
+        showError(error.message);
+    } finally {
+        hideIdeasLoading();
+    }
+}
+
+function showIdeasLoading(message = '아이디어 생성 중...') {
+    const ideasLoading = document.getElementById('ideas-loading');
+    const ideasLoadingMessage = document.getElementById('ideas-loading-message');
+    if (ideasLoading) {
+        ideasLoading.style.display = 'block';
+        if (ideasLoadingMessage) {
+            ideasLoadingMessage.textContent = message;
+        }
+    }
+}
+
+function hideIdeasLoading() {
+    const ideasLoading = document.getElementById('ideas-loading');
+    if (ideasLoading) {
+        ideasLoading.style.display = 'none';
+    }
+}
+
+function renderIdeasResult(data) {
+    const ideasResult = document.getElementById('ideas-result');
+    const ideasResultContent = document.getElementById('ideas-result-content');
+    const ideasResultActions = document.getElementById('ideas-result-actions');
+
+    if (!ideasResult || !ideasResultContent) return;
+
+    const ideas = data.ideas || [];
+    const zipPath = data.zip_path || null;
+
+    // 액션 영역 초기화
+    if (ideasResultActions) {
+        ideasResultActions.innerHTML = '';
+        if (zipPath) {
+            const downloadBtn = document.createElement('button');
+            downloadBtn.type = 'button';
+            downloadBtn.className = 'btn-export';
+            downloadBtn.textContent = '전체 ZIP 다운로드';
+            downloadBtn.addEventListener('click', () => {
+                const downloadUrl = `${API_BASE_URL}${zipPath}`;
+                window.location.href = downloadUrl;
+            });
+            ideasResultActions.appendChild(downloadBtn);
+        }
+    }
+
+    if (ideas.length === 0) {
+        ideasResultContent.innerHTML = '<p>생성된 아이디어가 없습니다.</p>';
+        ideasResult.style.display = 'block';
+        return;
+    }
+
+    let html = '';
+    html += `<p class="result-summary">총 <strong>${ideas.length}개</strong>의 아이디어가 생성되었습니다.</p>`;
+    html += '<div class="ideas-list">';
+
+    ideas.forEach((idea) => {
+        const safeTitle = escapeHtml(idea.title || '');
+        const safePrompt = escapeHtml(idea.prompt || '').replace(/\n/g, '<br>');
+        const filePath = idea.file_path || null;
+
+        html += `
+            <div class="idea-card">
+                <div class="idea-card-header">
+                    <span class="idea-index">#${idea.index}</span>
+                    <h4 class="idea-title">${safeTitle}</h4>
+                </div>
+                <div class="idea-body">
+                    <div class="idea-section">
+                        <strong>작성 프롬프트</strong>
+                        <div class="idea-prompt">${safePrompt}</div>
+                    </div>
+                    ${filePath ? `
+                        <div class="idea-actions">
+                            <a href="${API_BASE_URL}${filePath}" class="btn-secondary-small" download>TXT 다운로드</a>
+                        </div>
+                    ` : ''}
+                </div>
+            </div>
+        `;
+    });
+
+    html += '</div>';
+
+    ideasResultContent.innerHTML = html;
+    ideasResult.style.display = 'block';
+}
+
+// 네이버 발행용 파일 다운로드
+async function handleExportBlog() {
+    if (!quillTitle || !quillBody || !quillTags) {
+        alert('에디터가 초기화되지 않았습니다.');
+        return;
+    }
+
+    const blogContent = quillContentToJSON();
+    if (!blogContent) {
+        alert('블로그 내용을 JSON으로 변환할 수 없습니다.');
+        return;
+    }
+
+    // 에디터 내 모든 이미지 수집
+    const imgNodes = quillBody.root.querySelectorAll('img');
+    const images = Array.from(imgNodes).map((img, idx) => {
+        const src = img.getAttribute('src') || '';
+        return {
+            index: idx + 1,
+            src,
+            style: (window.imageStyleMap && window.imageStyleMap[src]) || null,
+            caption: (window.imageCaptionMap && window.imageCaptionMap[src]) || ''
+        };
+    });
+
+    try {
+        showLoading('네이버 발행용 파일 생성 중...');
+        updateLoadingStep('에디터 내용을 JSON으로 변환 중', 'processing');
+
+        const res = await fetch(`${API_BASE_URL}/api/export-blog`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                blog_content: blogContent,
+                images: images
+            })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok || !data.success) {
+            throw new Error(data.error || '파일 내보내기 실패');
+        }
+
+        updateLoadingStep('에디터 내용을 JSON으로 변환 중', 'completed');
+        updateLoadingStep('파일 패키지 생성 완료', 'completed');
+
+        if (data.zip_path) {
+            // ZIP 파일 다운로드
+            const downloadUrl = `${API_BASE_URL}${data.zip_path}`;
+            window.location.href = downloadUrl;
+        } else {
+            alert('ZIP 파일 경로를 받지 못했습니다.');
+        }
+
+        hideLoading();
+    } catch (e) {
+        console.error(e);
+        hideLoading();
+        alert('발행용 파일 생성 중 오류가 발생했습니다: ' + e.message);
     }
 }
 
@@ -890,182 +1138,17 @@ function renderBlogContent(content) {
     return html;
 }
 
-// 블로그 콘텐츠를 제목, 본문, 태그로 분리하여 렌더링
+// 블로그 콘텐츠를 제목, 본문, 태그로 분리하여 렌더링 (Quill 에디터 사용)
 function renderBlogContentSeparated(content) {
     if (!content) return;
 
-    const applyStyle = (style) => {
-        if (!style) return '';
-        let css = '';
-        if (style.font_size) css += `font-size: ${style.font_size}px; `;
-        if (style.color) {
-            css += `color: ${style.color}; `;
-        } else {
-            css += 'color: #333333; ';
-        }
-        if (style.background) {
-            css += `background-color: ${style.background}; `;
-        } else {
-            css += 'background-color: transparent; ';
-        }
-        if (style.bold) css += 'font-weight: bold; ';
-        if (style.italic) css += 'font-style: italic; ';
-        if (style.underline) css += 'text-decoration: underline; ';
-        if (style.line_height) css += `line-height: ${style.line_height}; `;
-        if (style.padding) css += `padding: ${style.padding}; `;
-        if (style.margin) css += `margin: ${style.margin}; `;
-        if (style.border_left) css += `border-left: ${style.border_left}; `;
-        if (style.quote) {
-            css += 'border-left: 4px solid #cccccc; background-color: #f5f5f5; padding: 10px 15px; margin: 10px 0; ';
-            if (!style.color) {
-                css += 'color: #333333; ';
-            }
-        }
-        return css ? `style="${css}"` : '';
-    };
+    // Quill 에디터 초기화
+    initializeQuillEditors();
 
-    // 제목 영역
-    const titleDiv = document.getElementById('result-title');
-    if (titleDiv) {
-        if (content.title) {
-            titleDiv.innerHTML = `<h1 ${applyStyle(content.title.style)}>${escapeHtml(content.title.content)}</h1>`;
-        } else {
-            titleDiv.innerHTML = '';
-        }
-    }
-
-    // 본문 영역 (서론 + 본문 + 결론 + FAQ)
-    const bodyDiv = document.getElementById('result-body');
-    if (bodyDiv) {
-        let bodyHtml = '<div class="blog-content">';
-
-        // 서론
-        if (content.introduction) {
-            bodyHtml += `<div ${applyStyle(content.introduction.style)}>${escapeHtml(content.introduction.content).replace(/\n/g, '<br>')}</div>`;
-        }
-
-        // 본문
-        if (content.body && Array.isArray(content.body)) {
-            bodyHtml += '<div class="blog-body">';
-            
-            // 이미지 플레이스홀더 인덱스 추적 (전체 본문에서 순차적으로)
-            let globalImageIndex = 1;
-            const generatedImages = content.generated_images || [];
-            
-            content.body.forEach((section, sectionIdx) => {
-                bodyHtml += '<div class="blog-section">';
-                
-                // 부제목
-                if (section.subtitle) {
-                    bodyHtml += `<h2 ${applyStyle(section.subtitle.style)}>${escapeHtml(section.subtitle.content)}</h2>`;
-                }
-
-                // 블록들
-                if (section.blocks && Array.isArray(section.blocks)) {
-                    bodyHtml += '<div class="blog-blocks">';
-                    section.blocks.forEach((block, blockIdx) => {
-                        if (block.type === 'paragraph') {
-                            bodyHtml += `<p ${applyStyle(block.style)}>${escapeHtml(block.content).replace(/\n/g, '<br>')}</p>`;
-                        } else if (block.type === 'quote') {
-                            bodyHtml += `<blockquote ${applyStyle(block.style)}>${escapeHtml(block.content).replace(/\n/g, '<br>')}</blockquote>`;
-                        } else if (block.type === 'list') {
-                            bodyHtml += `<ul ${applyStyle(block.style)}>`;
-                            if (block.items && Array.isArray(block.items)) {
-                                block.items.forEach(item => {
-                                    bodyHtml += `<li>${escapeHtml(item)}</li>`;
-                                });
-                            }
-                            bodyHtml += '</ul>';
-                        } else if (block.type === 'image_placeholder') {
-                            // 생성된 이미지가 있는지 확인 (placeholder 또는 index로 매칭)
-                            const imageInfo = generatedImages.find(img => 
-                                img.index === globalImageIndex || 
-                                img.placeholder === block.placeholder
-                            );
-                            
-                            if (imageInfo && imageInfo.image_path) {
-                                // 이미지 URL 구성 (정적 파일 경로)
-                                // 백슬래시를 슬래시로 변환 (Windows 경로 대응)
-                                const normalizedPath = imageInfo.image_path.replace(/\\/g, '/');
-                                const imageUrl = `${API_BASE_URL}/static/blog/create_naver/${normalizedPath}`;
-                                // 파일명 추출 (경로에서 마지막 부분만)
-                                const pathParts = normalizedPath.split('/');
-                                const actualFilename = pathParts[pathParts.length - 1] || (escapeHtml(block.placeholder.replace(/[^a-zA-Z0-9가-힣]/g, '_')) + '.png');
-                                const safeFilename = actualFilename;
-                                bodyHtml += `
-                                    <div class="generated-image-container" style="margin: 20px 0;">
-                                        <img src="${imageUrl}" alt="${escapeHtml(block.placeholder)}" 
-                                             style="max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 4px; display: block; margin: 10px 0;" 
-                                             onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
-                                        <div style="display: none; padding: 10px; background: #f5f5f5; border-radius: 4px; color: #666;">
-                                            이미지를 불러올 수 없습니다: ${escapeHtml(block.placeholder)}
-                                        </div>
-                                        <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center;">
-                                            <button onclick="downloadImage('${imageUrl}', '${safeFilename}')" 
-                                                    class="btn-secondary-small" 
-                                                    style="padding: 4px 12px; font-size: 12px;">
-                                                📥 이미지 다운로드
-                                            </button>
-                                            <span style="font-size: 12px; color: #999; font-style: italic;">
-                                                ${escapeHtml(block.placeholder)}
-                                            </span>
-                                        </div>
-                                    </div>
-                                `;
-                            } else {
-                                // 이미지가 생성되지 않은 경우 플레이스홀더만 표시
-                                bodyHtml += `<div ${applyStyle(block.style)}>${escapeHtml(block.placeholder || '[이미지 삽입]')}</div>`;
-                            }
-                            
-                            // 이미지 플레이스홀더를 만날 때마다 인덱스 증가
-                            globalImageIndex++;
-                        } else if (block.type === 'hr') {
-                            bodyHtml += `<hr ${applyStyle(block.style)}>`;
-                        }
-                    });
-                    bodyHtml += '</div>';
-                }
-
-                bodyHtml += '</div>';
-            });
-            bodyHtml += '</div>';
-        }
-
-        // 결론
-        if (content.conclusion) {
-            bodyHtml += `<div ${applyStyle(content.conclusion.style)}>${escapeHtml(content.conclusion.content).replace(/\n/g, '<br>')}</div>`;
-        }
-
-        // FAQ
-        if (content.faq && Array.isArray(content.faq) && content.faq.length > 0) {
-            bodyHtml += '<div class="blog-faq"><h2>자주 묻는 질문</h2>';
-            content.faq.forEach((faq, faqIdx) => {
-                bodyHtml += '<div class="faq-item">';
-                if (faq.q) {
-                    bodyHtml += `<h3 ${applyStyle(faq.q.style)}>Q: ${escapeHtml(faq.q.content)}</h3>`;
-                }
-                if (faq.a) {
-                    bodyHtml += `<p ${applyStyle(faq.a.style)}>A: ${escapeHtml(faq.a.content).replace(/\n/g, '<br>')}</p>`;
-                }
-                bodyHtml += '</div>';
-            });
-            bodyHtml += '</div>';
-        }
-
-        bodyHtml += '</div>';
-        bodyDiv.innerHTML = bodyHtml;
-    }
-
-    // 태그 영역 (순수 텍스트로만 표시 - 쉼표로 구분)
-    const tagsDiv = document.getElementById('result-tags');
-    if (tagsDiv) {
-        if (content.tags && Array.isArray(content.tags) && content.tags.length > 0) {
-            // HTML 태그 없이 순수 텍스트로만 표시 (편집 시 스타일 깨짐 방지)
-            tagsDiv.textContent = content.tags.join(', ');
-        } else {
-            tagsDiv.textContent = '';
-        }
-    }
+    // 약간의 지연을 두고 콘텐츠 로드 (에디터 초기화 완료 대기)
+    setTimeout(() => {
+        loadBlogContentToQuill(content);
+    }, 200);
 }
 
 // 네이버 에디터용 HTML 스타일 적용 함수
@@ -1151,107 +1234,46 @@ function applyNaverStyle(style, isSubtitle = false) {
 
 // 네이버 에디터에 복사하기 (HTML 형식으로 스타일 포함)
 function copyBlogContentToNaverEditor() {
-    if (!window.currentBlogContent) {
-        alert('복사할 내용이 없습니다.');
+    // Quill 에디터에서 직접 내용 가져오기
+    if (!quillTitle || !quillBody || !quillTags) {
+        alert('에디터가 초기화되지 않았습니다.');
         return;
     }
 
-    const content = window.currentBlogContent;
+    // Quill에서 HTML 가져오기
+    const titleHtml = quillTitle.root.innerHTML;
+    const bodyHtml = quillBody.root.innerHTML;
+    const tagsText = quillTags.getText();
+
+    // 기존 JSON 구조도 유지 (하위 호환성)
+    const content = window.currentBlogContent || {};
     let html = '';
 
     // 제목
-    if (content.title) {
-        const titleStyle = applyNaverStyle(content.title.style);
-        html += `<div ${titleStyle} style="margin-bottom: 20px;">${escapeHtml(content.title.content)}</div>\n`;
+    if (titleHtml) {
+        html += `<div style="margin-bottom: 20px; font-size: 26px; font-weight: bold; color: #333;">${titleHtml}</div>\n`;
     }
 
-    // 서론
-    if (content.introduction) {
-        const introStyle = applyNaverStyle(content.introduction.style);
-        const introContent = escapeHtml(content.introduction.content).replace(/\n/g, '<br>');
-        html += `<div ${introStyle} style="margin-bottom: 25px;">${introContent}</div>\n`;
-    }
+    // 본문 (Quill HTML 사용)
+    if (bodyHtml) {
+        // 에디터 내에서만 사용되는 이미지 스타일 툴바 제거
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = bodyHtml;
+        tempDiv.querySelectorAll('.image-style-toolbar').forEach(el => el.remove());
 
-    // 본문
-    if (content.body && Array.isArray(content.body)) {
-        content.body.forEach((section, sectionIdx) => {
-            // 섹션 시작
-            html += '<div>\n';
-            
-            // 첫 번째 섹션이 아니면 소제목 위에 구분선 추가
-            if (sectionIdx > 0) {
-                html += '  <hr style="margin: 30px 0 20px 0; border: none; border-top: 2px solid #e0e0e0; background: none; height: 0;">\n';
-            }
-            
-            // 부제목 (단순한 구조로 네이버 에디터 자동 구분선 방지)
-            if (section.subtitle) {
-                const subtitleStyle = applyNaverStyle(section.subtitle.style, true);
-                // 소제목은 단순한 div로 표시 (네이버 에디터가 자동 구분선을 추가하지 않도록)
-                // strong, border, padding 등 제거하여 단순한 구조 유지
-                html += `  <div ${subtitleStyle}>${escapeHtml(section.subtitle.content)}</div>\n`;
-            }
+        let processedBodyHtml = tempDiv.innerHTML;
 
-            // 블록들
-            if (section.blocks && Array.isArray(section.blocks)) {
-                section.blocks.forEach((block, blockIdx) => {
-                    if (block.type === 'paragraph') {
-                        const blockStyle = applyNaverStyle(block.style);
-                        const blockContent = escapeHtml(block.content).replace(/\n/g, '<br>');
-                        // 문단별 간격 추가 (margin-bottom)
-                        html += `  <div ${blockStyle} style="margin-bottom: 20px; line-height: 1.8;">${blockContent}</div>\n`;
-                    } else if (block.type === 'quote') {
-                        const quoteStyle = applyNaverStyle(block.style);
-                        const quoteContent = escapeHtml(block.content).replace(/\n/g, '<br>');
-                        html += `  <blockquote ${quoteStyle} style="margin-bottom: 20px;">${quoteContent}</blockquote>\n`;
-                    } else if (block.type === 'list') {
-                        const listStyle = applyNaverStyle(block.style);
-                        html += `  <ul ${listStyle} style="margin-bottom: 20px; padding-left: 25px; line-height: 1.8;">\n`;
-                        if (block.items && Array.isArray(block.items)) {
-                            block.items.forEach(item => {
-                                const itemStyle = applyNaverStyle(block.style);
-                                html += `    <li ${itemStyle} style="margin-bottom: 8px;">${escapeHtml(item)}</li>\n`;
-                            });
-                        }
-                        html += `  </ul>\n`;
-                    } else if (block.type === 'image_placeholder') {
-                        const imgStyle = applyNaverStyle(block.style);
-                        html += `  <div ${imgStyle} style="margin-bottom: 20px; text-align: center;">[ ${escapeHtml(block.placeholder || '이미지 삽입')} ]</div>\n`;
-                    } else if (block.type === 'hr') {
-                        const hrStyle = applyNaverStyle(block.style);
-                        html += `  <hr ${hrStyle} style="margin: 30px 0; border: none; border-top: 2px solid #e0e0e0;">\n`;
-                    }
-                });
+        // Quill의 이미지 URL을 절대 경로로 변환
+        processedBodyHtml = processedBodyHtml.replace(/src="([^"]+)"/g, (match, url) => {
+            // 상대 경로인 경우 API_BASE_URL 추가
+            if (url.startsWith('/static/')) {
+                return `src="${API_BASE_URL}${url}"`;
             }
-
-            html += '</div>\n';
+            // 이미 절대 경로인 경우 그대로
+            return match;
         });
-    }
-
-    // 결론
-    if (content.conclusion) {
-        const conclusionStyle = applyNaverStyle(content.conclusion.style);
-        const conclusionContent = escapeHtml(content.conclusion.content).replace(/\n/g, '<br>');
-        html += `<div ${conclusionStyle} style="margin-top: 30px; margin-bottom: 25px;">${conclusionContent}</div>\n`;
-    }
-
-    // FAQ
-    if (content.faq && Array.isArray(content.faq) && content.faq.length > 0) {
-        html += '<div>\n';
-        html += '  <div style="font-size: 18px; font-weight: bold; margin-top: 30px; margin-bottom: 15px; color: #333333; background-color: transparent;">자주 묻는 질문</div>\n';
-        content.faq.forEach((faq, faqIdx) => {
-            html += '  <div style="margin-bottom: 20px; padding: 15px; background-color: #f9f9f9; border-radius: 8px;">\n';
-            if (faq.q) {
-                const qStyle = applyNaverStyle(faq.q.style);
-                html += `    <div ${qStyle}>Q: ${escapeHtml(faq.q.content)}</div>\n`;
-            }
-            if (faq.a) {
-                const aStyle = applyNaverStyle(faq.a.style);
-                const aContent = escapeHtml(faq.a.content).replace(/\n/g, '<br>');
-                html += `    <div ${aStyle} style="margin-top: 8px;">A: ${aContent}</div>\n`;
-            }
-            html += '  </div>\n';
-        });
-        html += '</div>\n';
+        
+        html += `<div style="line-height: 1.8; color: #333;">${processedBodyHtml}</div>\n`;
     }
 
     // 클립보드에 HTML 형식으로 복사
@@ -1275,7 +1297,7 @@ function copyBlogContentToNaverEditor() {
                     btn.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
                 }, 2000);
             }
-            alert('✅ 블로그 내용이 클립보드에 복사되었습니다!\n\n네이버 블로그 에디터에서 Ctrl+V (또는 Cmd+V)로 붙여넣으세요.\n스타일이 포함된 HTML 형식으로 복사되었습니다.');
+            alert('✅ 블로그 내용이 클립보드에 복사되었습니다!\n\nCtrl+V (또는 Cmd+V)로 붙여넣으세요.\n스타일이 포함된 HTML 형식으로 복사되었습니다.');
         }).catch(err => {
             console.error('복사 실패:', err);
             fallbackCopyHTMLToClipboard(html);
@@ -1323,7 +1345,7 @@ function fallbackCopyHTMLToClipboard(html) {
                     btn.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
                 }, 2000);
             }
-            alert('✅ 블로그 내용이 클립보드에 복사되었습니다!\n\n네이버 블로그 에디터에서 붙여넣으세요.');
+            alert('✅ 블로그 내용이 클립보드에 복사되었습니다!');
         } else {
             alert('복사에 실패했습니다. 텍스트를 수동으로 선택해서 복사해주세요.');
         }
@@ -1394,5 +1416,1042 @@ function escapeHtml(text) {
         "'": '&#039;'
     };
     return String(text).replace(/[&<>"']/g, m => map[m]);
+}
+
+// ===== Quill Editor 관련 함수 =====
+
+// 네이버 에디터 기준 폰트 크기 정의
+const NAVER_FONT_SIZES = {
+    '11': '11px',
+    '13': '13px',
+    '15': '15px',
+    '16': '16px',
+    '19': '19px',
+    '24': '24px',
+    '28': '28px',
+    '30': '30px',
+    '34': '34px',
+    '38': '38px'
+};
+
+// 네이버 에디터 스타일 정의
+const NAVER_STYLES = {
+    'body': '본문',
+    'subtitle': '소제목',
+    'quote': '인용구'
+};
+
+// Quill 커스텀 Size 클래스 등록
+const Size = Quill.import('attributors/style/size');
+Size.whitelist = Object.keys(NAVER_FONT_SIZES).map(key => NAVER_FONT_SIZES[key]);
+Quill.register(Size, true);
+
+// Quill 에디터 인스턴스 저장
+let quillTitle = null;
+let quillBody = null;
+let quillTags = null;
+
+// 에디터 내 이미지 스타일 메타데이터 (src -> 'ai' | 'thumbnail')
+window.imageStyleMap = window.imageStyleMap || {};
+// 에디터 내 이미지 설명(캡션) 메타데이터 (src -> caption string)
+window.imageCaptionMap = window.imageCaptionMap || {};
+
+
+// localStorage 키
+const STORAGE_KEYS = {
+    TITLE: 'dmalab_editor_title',
+    BODY: 'dmalab_editor_body',
+    TAGS: 'dmalab_editor_tags'
+};
+
+// 에디터 내용을 localStorage에 저장
+function saveEditorContent() {
+    try {
+        if (quillTitle) {
+            const titleContent = quillTitle.getContents();
+            localStorage.setItem(STORAGE_KEYS.TITLE, JSON.stringify(titleContent));
+        }
+        if (quillBody) {
+            const bodyContent = quillBody.getContents();
+            localStorage.setItem(STORAGE_KEYS.BODY, JSON.stringify(bodyContent));
+        }
+        if (quillTags) {
+            const tagsContent = quillTags.getContents();
+            localStorage.setItem(STORAGE_KEYS.TAGS, JSON.stringify(tagsContent));
+        }
+    } catch (error) {
+        console.error('에디터 내용 저장 실패:', error);
+    }
+}
+
+// localStorage에서 에디터 내용 복원
+function restoreEditorContent() {
+    try {
+        if (quillTitle) {
+            const savedTitle = localStorage.getItem(STORAGE_KEYS.TITLE);
+            if (savedTitle) {
+                const titleDelta = JSON.parse(savedTitle);
+                if (titleDelta && titleDelta.ops && titleDelta.ops.length > 0) {
+                    quillTitle.setContents(titleDelta);
+                }
+            }
+        }
+        if (quillBody) {
+            const savedBody = localStorage.getItem(STORAGE_KEYS.BODY);
+            if (savedBody) {
+                const bodyDelta = JSON.parse(savedBody);
+                if (bodyDelta && bodyDelta.ops && bodyDelta.ops.length > 0) {
+                    quillBody.setContents(bodyDelta);
+                }
+            }
+        }
+        if (quillTags) {
+            const savedTags = localStorage.getItem(STORAGE_KEYS.TAGS);
+            if (savedTags) {
+                const tagsDelta = JSON.parse(savedTags);
+                if (tagsDelta && tagsDelta.ops && tagsDelta.ops.length > 0) {
+                    quillTags.setContents(tagsDelta);
+                }
+            }
+        }
+    } catch (error) {
+        console.error('에디터 내용 복원 실패:', error);
+    }
+}
+
+// 에디터 내용 초기화 (localStorage도 함께 삭제)
+function clearEditorContent() {
+    try {
+        localStorage.removeItem(STORAGE_KEYS.TITLE);
+        localStorage.removeItem(STORAGE_KEYS.BODY);
+        localStorage.removeItem(STORAGE_KEYS.TAGS);
+        
+        if (quillTitle) quillTitle.setContents([]);
+        if (quillBody) quillBody.setContents([]);
+        if (quillTags) quillTags.setContents([]);
+    } catch (error) {
+        console.error('에디터 내용 초기화 실패:', error);
+    }
+}
+
+// 임시 저장된 에디터 내용이 있는지 확인
+function hasSavedEditorContent() {
+    try {
+        const title = localStorage.getItem(STORAGE_KEYS.TITLE);
+        const body = localStorage.getItem(STORAGE_KEYS.BODY);
+        const tags = localStorage.getItem(STORAGE_KEYS.TAGS);
+
+        const hasTitle = !!(title && JSON.parse(title)?.ops?.length);
+        const hasBody = !!(body && JSON.parse(body)?.ops?.length);
+        const hasTags = !!(tags && JSON.parse(tags)?.ops?.length);
+
+        return hasTitle || hasBody || hasTags;
+    } catch (e) {
+        console.error('임시 저장 여부 확인 중 오류:', e);
+        return false;
+    }
+}
+
+// 새로고침 시 임시 저장된 글을 불러올지 물어보는 팝업 표시
+function showRestoreDraftModalIfNeeded() {
+    if (!hasSavedEditorContent()) {
+        return;
+    }
+
+    // 이미 모달이 있으면 다시 만들지 않음
+    if (document.querySelector('.autosave-modal-overlay')) {
+        return;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'autosave-modal-overlay';
+
+    const modal = document.createElement('div');
+    modal.className = 'autosave-modal';
+    modal.innerHTML = `
+        <h3 class="autosave-modal-title">작성 중이던 글이 있습니다</h3>
+        <p class="autosave-modal-message">
+            이전에 작성하던 임시 저장 내용을 불러올까요?<br>
+            "불러오기"를 선택하면 제목/본문/태그가 복원됩니다.
+        </p>
+        <div class="autosave-modal-actions">
+            <button type="button" class="autosave-btn-primary" data-action="restore">불러오기</button>
+            <button type="button" class="autosave-btn-secondary" data-action="discard">새로 작성</button>
+        </div>
+    `;
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    const handleAction = (action) => {
+        if (action === 'restore') {
+            restoreEditorContent();
+        } else if (action === 'discard') {
+            clearEditorContent();
+        }
+        overlay.remove();
+    };
+
+    overlay.addEventListener('click', (e) => {
+        // 바깥 클릭 시에는 닫지 않고, 버튼으로만 처리
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        const action = btn.getAttribute('data-action');
+        handleAction(action);
+    });
+}
+
+// Quill 에디터 초기화
+function initializeQuillEditors() {
+    // 제목 에디터
+    const titleContainer = document.getElementById('result-title');
+    if (titleContainer && !quillTitle) {
+        quillTitle = new Quill('#result-title', {
+            theme: 'snow',
+            modules: {
+                toolbar: [
+                    [{ 'size': Object.values(NAVER_FONT_SIZES) }],
+                    ['bold', 'italic', 'underline'],
+                    [{ 'color': [] }, { 'background': [] }],
+                    ['link']
+                ]
+            },
+            placeholder: '제목을 입력하세요...'
+        });
+        
+        // 제목 변경 시 자동 저장 (디바운싱 적용)
+        let titleSaveTimeout = null;
+        quillTitle.on('text-change', function() {
+            clearTimeout(titleSaveTimeout);
+            titleSaveTimeout = setTimeout(() => {
+                saveEditorContent();
+            }, 500); // 500ms 후 저장
+        });
+
+    }
+
+    // 본문 에디터
+    const bodyContainer = document.getElementById('result-body');
+    if (bodyContainer && !quillBody) {
+        const toolbarOptions = [
+            [{ 'size': Object.values(NAVER_FONT_SIZES) }],
+            ['bold', 'italic', 'underline', 'strike'],
+            [{ 'color': [] }, { 'background': [] }],
+            [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+            [{ 'indent': '-1'}, { 'indent': '+1' }],
+            ['link', 'image'],
+            ['clean']
+        ];
+        
+        quillBody = new Quill('#result-body', {
+            theme: 'snow',
+            modules: {
+                toolbar: toolbarOptions
+            },
+            placeholder: '본문을 입력하세요...'
+        });
+
+        // 이미지 업로드 핸들러
+        quillBody.getModule('toolbar').addHandler('image', function() {
+            selectLocalImage();
+        });
+
+        // 이미지 클릭 시 스타일 편집 UI 표시 (에디터 DOM을 직접 수정하지 않고, 바깥에 오버레이로 표시)
+        quillBody.root.addEventListener('click', function (event) {
+            const img = event.target.closest('img');
+
+            // 이미지 외 영역 클릭 시 기존 오버레이 제거
+            if (!img) {
+                const existingOverlay = document.querySelector('.image-style-toolbar-overlay');
+                if (existingOverlay) existingOverlay.remove();
+                return;
+            }
+
+            const src = img.getAttribute('src');
+            if (!src) return;
+
+            // 기존 오버레이 제거 후 새로 생성
+            const existingOverlay = document.querySelector('.image-style-toolbar-overlay');
+            if (existingOverlay) existingOverlay.remove();
+
+            const overlay = document.createElement('div');
+            overlay.className = 'image-style-toolbar-overlay image-style-toolbar';
+            overlay.innerHTML = `
+                <div class="image-style-row">
+                    <span class="image-style-label">이미지 스타일:</span>
+                    <button type="button" data-style="ai">AI 생성</button>
+                    <button type="button" data-style="thumbnail">썸네일</button>
+                </div>
+                <div class="image-caption-row">
+                    <input type="text" class="image-caption-input" placeholder="이미지 설명 (파일 제목용) 입력..." />
+                </div>
+            `;
+
+            // 현재 스타일 반영
+            const currentStyle = window.imageStyleMap[src] || '';
+            overlay.querySelectorAll('button[data-style]').forEach(btn => {
+                if (btn.getAttribute('data-style') === currentStyle) {
+                    btn.classList.add('active');
+                }
+            });
+
+            // 현재 캡션 반영
+            const captionInput = overlay.querySelector('.image-caption-input');
+            if (captionInput) {
+                captionInput.value = window.imageCaptionMap[src] || '';
+                captionInput.addEventListener('input', () => {
+                    const value = captionInput.value.trim();
+                    if (value) {
+                        window.imageCaptionMap[src] = value;
+                        // 이미지 데이터 속성에도 저장 (추후 활용)
+                        img.dataset.caption = value;
+                    } else {
+                        delete window.imageCaptionMap[src];
+                        delete img.dataset.caption;
+                    }
+                });
+            }
+
+            // 버튼 클릭 핸들러
+            overlay.addEventListener('click', (e) => {
+                const btn = e.target.closest('button[data-style]');
+                if (!btn) return;
+                const style = btn.getAttribute('data-style');
+
+                const prev = window.imageStyleMap[src] || '';
+
+                let nextStyle = style;
+                // 같은 버튼을 다시 누르면 해제(기본 본문 이미지)
+                if (prev === style) {
+                    nextStyle = '';
+                }
+
+                // 메타데이터 갱신
+                if (nextStyle) {
+                    window.imageStyleMap[src] = nextStyle;
+                } else {
+                    delete window.imageStyleMap[src];
+                }
+
+                // 버튼 active 상태 갱신
+                overlay.querySelectorAll('button[data-style]').forEach(b => b.classList.remove('active'));
+                if (nextStyle) {
+                    btn.classList.add('active');
+                }
+
+                // 이미지 클래스/데이터 속성 갱신
+                img.classList.remove('img-style-ai', 'img-style-thumbnail');
+                img.dataset.style = nextStyle || '';
+                if (nextStyle === 'ai') img.classList.add('img-style-ai');
+                if (nextStyle === 'thumbnail') img.classList.add('img-style-thumbnail');
+            });
+
+            // 화면 좌표 기준으로 이미지 바로 아래에 오버레이 위치시키기
+            const imgRect = img.getBoundingClientRect();
+            const scrollY = window.scrollY || window.pageYOffset;
+            const scrollX = window.scrollX || window.pageXOffset;
+
+            overlay.style.top = `${imgRect.bottom + scrollY + 4}px`;
+            overlay.style.left = `${imgRect.left + scrollX}px`;
+
+            document.body.appendChild(overlay);
+        });
+        
+        // 툴바에 스타일 드롭다운 추가 (본문 / 소제목 / 인용구)
+        setTimeout(() => {
+            const toolbarModule = quillBody.getModule('toolbar');
+            if (!toolbarModule || !toolbarModule.container) {
+                console.warn('[DMaLab] Quill toolbar 모듈을 찾을 수 없습니다.');
+                return;
+            }
+
+            const toolbar = toolbarModule.container;
+
+            // 이미 추가되어 있다면 다시 추가하지 않음
+            if (toolbar.querySelector('.ql-style-custom')) {
+                return;
+            }
+
+            const styleContainer = document.createElement('span');
+            styleContainer.className = 'ql-formats';
+
+            const styleSelect = document.createElement('select');
+            styleSelect.className = 'ql-style-custom';
+            styleSelect.title = '글 스타일';
+
+            Object.keys(NAVER_STYLES).forEach(key => {
+                const option = document.createElement('option');
+                option.value = key;
+                option.textContent = NAVER_STYLES[key]; // 본문 / 소제목 / 인용구
+                styleSelect.appendChild(option);
+            });
+
+            // 기본 선택값을 '본문'으로 설정
+            styleSelect.value = 'body';
+
+            styleSelect.addEventListener('change', function() {
+                const value = this.value;
+                const range = quillBody.getSelection(true);
+                if (!range) return;
+
+                if (value === 'subtitle') {
+                    // 소제목: H2
+                    quillBody.formatLine(range.index, range.length, 'header', 2);
+                    quillBody.formatLine(range.index, range.length, 'blockquote', false);
+                } else if (value === 'quote') {
+                    // 인용구
+                    quillBody.formatLine(range.index, range.length, 'header', false);
+                    quillBody.formatLine(range.index, range.length, 'blockquote', true);
+                } else if (value === 'body') {
+                    // 본문
+                    quillBody.formatLine(range.index, range.length, 'header', false);
+                    quillBody.formatLine(range.index, range.length, 'blockquote', false);
+                }
+                // 선택값은 유지해서 드롭다운에 현재 스타일이 보이도록 함
+            });
+
+            styleContainer.appendChild(styleSelect);
+            // 툴바 맨 앞에 스타일 드롭다운 삽입
+            toolbar.insertBefore(styleContainer, toolbar.firstChild);
+
+            console.log('[DMaLab] 스타일 드롭다운 추가 완료');
+
+            // 현재 커서 위치에 따라 드롭다운 값을 동기화하는 헬퍼
+            const syncStyleSelectWithCursor = () => {
+                // focus=true를 주지 않아서 다른 에디터(제목/태그)로 포커스를 옮겼을 때
+                // 다시 본문으로 포커스가 강제로 돌아오지 않도록 함
+                const range = quillBody.getSelection();
+                if (!range) return;
+                const format = quillBody.getFormat(range);
+                if (format.header === 2) {
+                    styleSelect.value = 'subtitle';
+                } else if (format.blockquote) {
+                    styleSelect.value = 'quote';
+                } else {
+                    styleSelect.value = 'body';
+                }
+            };
+
+            // 선택 변경 / 내용 변경 시 드롭다운 값 업데이트
+            quillBody.on('selection-change', () => {
+                syncStyleSelectWithCursor();
+            });
+            quillBody.on('text-change', () => {
+                syncStyleSelectWithCursor();
+            });
+        }, 150);
+        
+        // 본문 변경 시 자동 저장 (디바운싱 적용)
+        let bodySaveTimeout = null;
+        quillBody.on('text-change', function() {
+            clearTimeout(bodySaveTimeout);
+            bodySaveTimeout = setTimeout(() => {
+                saveEditorContent();
+            }, 500); // 500ms 후 저장
+        });
+    }
+
+    // 태그 에디터 (툴바 없이 간단한 텍스트 입력)
+    const tagsContainer = document.getElementById('result-tags');
+    if (tagsContainer && !quillTags) {
+        quillTags = new Quill('#result-tags', {
+            theme: 'snow',
+            modules: {
+                toolbar: false
+            },
+            placeholder: '태그를 입력하세요 (쉼표로 구분)...'
+        });
+        
+        // 태그 변경 시 자동 저장 (디바운싱 적용)
+        let tagsSaveTimeout = null;
+        quillTags.on('text-change', function() {
+            clearTimeout(tagsSaveTimeout);
+            tagsSaveTimeout = setTimeout(() => {
+                saveEditorContent();
+            }, 500); // 500ms 후 저장
+        });
+    }
+    
+    // 에디터 초기화 후 저장된 내용 복원 (단, loadBlogContentToQuill이 호출되지 않은 경우만)
+    // loadBlogContentToQuill이 호출되면 자동으로 복원하지 않음
+    if (!window._isLoadingBlogContent) {
+        setTimeout(() => {
+            restoreEditorContent();
+        }, 100);
+    }
+}
+
+// 로컬 이미지 선택 및 삽입
+function selectLocalImage() {
+    const input = document.createElement('input');
+    input.setAttribute('type', 'file');
+    input.setAttribute('accept', 'image/*');
+    input.click();
+
+    input.onchange = () => {
+        const file = input.files[0];
+        if (file) {
+            // 파일 크기 체크 (5MB 제한)
+            if (file.size > 5 * 1024 * 1024) {
+                alert('이미지 크기는 5MB 이하여야 합니다.');
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const imageUrl = e.target.result;
+                if (!quillBody) {
+                    console.error('[DMaLab] quillBody 인스턴스를 찾을 수 없어 이미지를 삽입하지 못했습니다.');
+                    return;
+                }
+
+                let range = quillBody.getSelection(true);
+                // 선택 영역이 없으면 문서 끝에 삽입
+                if (!range) {
+                    range = { index: quillBody.getLength(), length: 0 };
+                }
+
+                try {
+                    quillBody.insertEmbed(range.index, 'image', imageUrl, 'user');
+                    // 이미지 뒤에 줄바꿈 추가
+                    quillBody.setSelection(range.index + 1, 0);
+                } catch (err) {
+                    console.error('[DMaLab] 이미지 삽입 중 오류:', err);
+                }
+            };
+            reader.readAsDataURL(file);
+        }
+    };
+}
+
+// JSON 스타일 정보를 Quill Delta 형식으로 변환
+function styleToQuillDelta(content, style) {
+    if (!content) return null;
+
+    const ops = [];
+    const lines = content.split('\n');
+    
+    lines.forEach((line, lineIndex) => {
+        if (lineIndex > 0) {
+            ops.push({ insert: '\n' });
+        }
+
+        if (line.trim()) {
+            const op = { insert: line };
+            
+            // 스타일 속성을 class로 변환
+            const classes = [];
+            const attributes = {};
+
+            if (style) {
+                if (style.font_size) {
+                    attributes.size = getQuillSize(style.font_size);
+                }
+                if (style.color) {
+                    attributes.color = style.color;
+                }
+                if (style.background) {
+                    attributes.background = style.background;
+                }
+                if (style.bold) {
+                    attributes.bold = true;
+                }
+                if (style.italic) {
+                    attributes.italic = true;
+                }
+                if (style.underline) {
+                    attributes.underline = true;
+                }
+                if (style.quote) {
+                    attributes.blockquote = true;
+                }
+            }
+
+            if (Object.keys(attributes).length > 0) {
+                op.attributes = attributes;
+            }
+
+            ops.push(op);
+        }
+    });
+
+    return { ops };
+}
+
+// 폰트 크기를 Quill size로 변환 (네이버 에디터 기준)
+function getQuillSize(fontSize) {
+    // 네이버 에디터 기준 폰트 크기로 매핑
+    const sizeMap = {
+        11: '11px',
+        13: '13px',
+        15: '15px',
+        16: '16px',
+        19: '19px',
+        24: '24px',
+        28: '28px',
+        30: '30px',
+        34: '34px',
+        38: '38px'
+    };
+    
+    // 가장 가까운 크기 찾기
+    const sizes = Object.keys(sizeMap).map(Number).sort((a, b) => a - b);
+    let closestSize = 16; // 기본값
+    
+    for (let i = 0; i < sizes.length; i++) {
+        if (fontSize <= sizes[i]) {
+            closestSize = sizes[i];
+            break;
+        }
+        closestSize = sizes[i];
+    }
+    
+    return sizeMap[closestSize] || '16px';
+}
+
+// Quill Delta를 JSON 스타일 형식으로 변환
+function quillDeltaToStyle(delta) {
+    if (!delta || !delta.ops) return { content: '', style: {} };
+
+    let content = '';
+    const style = {
+        font_size: 16,
+        color: null,
+        background: null,
+        bold: false,
+        italic: false,
+        underline: false,
+        quote: false
+    };
+
+    // 첫 번째 op의 스타일 정보 추출
+    const firstOp = delta.ops.find(op => op.insert && typeof op.insert === 'string' && op.insert.trim());
+    if (firstOp && firstOp.attributes) {
+        const attrs = firstOp.attributes;
+        
+        if (attrs.size) {
+            style.font_size = getFontSizeFromQuillSize(attrs.size);
+        }
+        if (attrs.color) {
+            style.color = attrs.color;
+        }
+        if (attrs.background) {
+            style.background = attrs.background;
+        }
+        if (attrs.bold) {
+            style.bold = true;
+        }
+        if (attrs.italic) {
+            style.italic = true;
+        }
+        if (attrs.underline) {
+            style.underline = true;
+        }
+        if (attrs.blockquote) {
+            style.quote = true;
+        }
+    }
+
+    // 전체 텍스트 추출
+    delta.ops.forEach(op => {
+        if (typeof op.insert === 'string') {
+            content += op.insert;
+        } else if (op.insert && op.insert.image) {
+            // 이미지는 placeholder로 처리
+            content += '[이미지]\n';
+        }
+    });
+
+    return { content: content.trim(), style };
+}
+
+// Quill size를 폰트 크기로 변환 (네이버 에디터 기준)
+function getFontSizeFromQuillSize(size) {
+    if (!size) return 16; // 기본값
+    
+    // '11px', '13px' 등의 형식에서 숫자만 추출
+    const match = size.match(/(\d+)px/);
+    if (match) {
+        return parseInt(match[1], 10);
+    }
+    
+    // 기존 매핑 (하위 호환성)
+    const sizeMap = {
+        'small': 13,
+        'large': 19,
+        'huge': 24
+    };
+    return sizeMap[size] || 16;
+}
+
+// JSON 블로그 콘텐츠를 Quill 에디터에 로드
+function loadBlogContentToQuill(content) {
+    if (!content) return;
+
+    // 에디터 초기화 확인
+    if (!quillTitle || !quillBody || !quillTags) {
+        window._isLoadingBlogContent = true; // 콘텐츠 로딩 중 플래그 설정
+        initializeQuillEditors();
+        // 초기화 후 약간의 지연을 두고 로드
+        setTimeout(() => {
+            loadBlogContentToQuill(content);
+        }, 200);
+        return;
+    }
+    
+    // 새 콘텐츠 로드 시 기존 저장된 내용은 덮어쓰기 (블로그 생성 시)
+    window._isLoadingBlogContent = true; // 콘텐츠 로딩 중 플래그 설정
+
+    // 제목 로드
+    if (content.title) {
+        const titleDelta = styleToQuillDelta(content.title.content, content.title.style);
+        if (titleDelta) {
+            quillTitle.setContents(titleDelta);
+        }
+    }
+
+    // 본문을 Delta 형식으로 구성
+    const bodyOps = [];
+    const generatedImages = content.generated_images || [];
+    let globalImageIndex = 1;
+
+    // 서론
+    if (content.introduction) {
+        const introDelta = styleToQuillDelta(content.introduction.content, content.introduction.style);
+        if (introDelta && introDelta.ops) {
+            bodyOps.push(...introDelta.ops);
+            bodyOps.push({ insert: '\n\n' });
+        }
+    }
+
+    // 본문 섹션들
+    if (content.body && Array.isArray(content.body)) {
+        content.body.forEach((section, sectionIdx) => {
+            // 섹션 간 구분선 (첫 섹션이 아니면)
+            if (sectionIdx > 0) {
+                bodyOps.push({ insert: '\n' });
+            }
+
+            // 부제목
+            if (section.subtitle) {
+                const subtitleDelta = styleToQuillDelta(section.subtitle.content, section.subtitle.style);
+                if (subtitleDelta && subtitleDelta.ops) {
+                    // 부제목은 header로 설정
+                    subtitleDelta.ops.forEach(op => {
+                        if (op.insert && typeof op.insert === 'string') {
+                            if (!op.attributes) op.attributes = {};
+                            op.attributes.header = 2;
+                            if (section.subtitle.style && section.subtitle.style.bold) {
+                                op.attributes.bold = true;
+                            }
+                        }
+                    });
+                    bodyOps.push(...subtitleDelta.ops);
+                    bodyOps.push({ insert: '\n\n' });
+                }
+            }
+
+            // 블록들
+            if (section.blocks && Array.isArray(section.blocks)) {
+                section.blocks.forEach((block) => {
+                    if (block.type === 'paragraph') {
+                        const paraDelta = styleToQuillDelta(block.content, block.style);
+                        if (paraDelta && paraDelta.ops) {
+                            bodyOps.push(...paraDelta.ops);
+                            bodyOps.push({ insert: '\n\n' });
+                        }
+                    } else if (block.type === 'quote') {
+                        const quoteDelta = styleToQuillDelta(block.content, block.style);
+                        if (quoteDelta && quoteDelta.ops) {
+                            quoteDelta.ops.forEach(op => {
+                                if (op.insert && typeof op.insert === 'string') {
+                                    if (!op.attributes) op.attributes = {};
+                                    op.attributes.blockquote = true;
+                                }
+                            });
+                            bodyOps.push(...quoteDelta.ops);
+                            bodyOps.push({ insert: '\n\n' });
+                        }
+                    } else if (block.type === 'list') {
+                        if (block.items && Array.isArray(block.items)) {
+                            block.items.forEach(item => {
+                                bodyOps.push({ insert: item });
+                                if (block.style) {
+                                    const attrs = {};
+                                    if (block.style.font_size) {
+                                        attrs.size = getQuillSize(block.style.font_size);
+                                    }
+                                    if (block.style.color) {
+                                        attrs.color = block.style.color;
+                                    }
+                                    if (block.style.bold) attrs.bold = true;
+                                    if (block.style.italic) attrs.italic = true;
+                                    if (Object.keys(attrs).length > 0) {
+                                        bodyOps[bodyOps.length - 1].attributes = attrs;
+                                    }
+                                }
+                                bodyOps.push({ insert: '\n', attributes: { list: 'bullet' } });
+                            });
+                        }
+                        bodyOps.push({ insert: '\n' });
+                    } else if (block.type === 'image_placeholder') {
+                        const imageInfo = generatedImages.find(img => 
+                            img.index === globalImageIndex || 
+                            img.placeholder === block.placeholder
+                        );
+                        
+                        if (imageInfo && imageInfo.image_path) {
+                            // 이미지 URL 구성
+                            let normalizedPath = imageInfo.image_path.replace(/\\/g, '/');
+                            
+                            // 상대 경로인 경우 절대 경로로 변환
+                            let imageUrl;
+                            if (normalizedPath.startsWith('http://') || normalizedPath.startsWith('https://')) {
+                                // 이미 절대 URL인 경우
+                                imageUrl = normalizedPath;
+                            } else if (normalizedPath.startsWith('/static/')) {
+                                // /static/로 시작하는 경우
+                                imageUrl = `${API_BASE_URL}${normalizedPath}`;
+                            } else {
+                                // 상대 경로인 경우
+                                imageUrl = `${API_BASE_URL}/static/blog/create_naver/${normalizedPath}`;
+                            }
+                            
+                            console.log('[이미지 삽입]', {
+                                imageInfo,
+                                normalizedPath,
+                                imageUrl,
+                                globalImageIndex
+                            });
+                            
+                            // Quill에 이미지 삽입
+                            bodyOps.push({ insert: { image: imageUrl } });
+                            bodyOps.push({ insert: '\n\n' });
+                        } else {
+                            // 플레이스홀더 텍스트
+                            const placeholderDelta = styleToQuillDelta(block.placeholder || '[이미지 삽입]', block.style);
+                            if (placeholderDelta && placeholderDelta.ops) {
+                                bodyOps.push(...placeholderDelta.ops);
+                                bodyOps.push({ insert: '\n\n' });
+                            }
+                        }
+                        globalImageIndex++;
+                    } else if (block.type === 'hr') {
+                        bodyOps.push({ insert: '\n' });
+                        // Quill은 hr을 직접 지원하지 않으므로 구분선으로 표시
+                        bodyOps.push({ insert: '---\n\n' });
+                    }
+                });
+            }
+        });
+    }
+
+    // 결론
+    if (content.conclusion) {
+        const conclusionDelta = styleToQuillDelta(content.conclusion.content, content.conclusion.style);
+        if (conclusionDelta && conclusionDelta.ops) {
+            bodyOps.push({ insert: '\n' });
+            bodyOps.push(...conclusionDelta.ops);
+            bodyOps.push({ insert: '\n\n' });
+        }
+    }
+
+    // FAQ
+    if (content.faq && Array.isArray(content.faq) && content.faq.length > 0) {
+        bodyOps.push({ insert: '자주 묻는 질문\n\n', attributes: { header: 2, bold: true } });
+        content.faq.forEach((faq) => {
+            if (faq.q) {
+                const qDelta = styleToQuillDelta('Q: ' + faq.q.content, faq.q.style);
+                if (qDelta && qDelta.ops) {
+                    qDelta.ops.forEach(op => {
+                        if (op.insert && typeof op.insert === 'string' && !op.attributes) {
+                            op.attributes = { bold: true };
+                        }
+                    });
+                    bodyOps.push(...qDelta.ops);
+                    bodyOps.push({ insert: '\n' });
+                }
+            }
+            if (faq.a) {
+                const aDelta = styleToQuillDelta('A: ' + faq.a.content, faq.a.style);
+                if (aDelta && aDelta.ops) {
+                    bodyOps.push(...aDelta.ops);
+                    bodyOps.push({ insert: '\n\n' });
+                }
+            }
+        });
+    }
+
+    // 본문을 Quill에 설정
+    quillBody.setContents({ ops: bodyOps });
+    
+    // 콘텐츠 로드 후 자동 저장
+    setTimeout(() => {
+        saveEditorContent();
+        window._isLoadingBlogContent = false; // 콘텐츠 로딩 완료
+    }, 100);
+
+    // 태그 로드
+    if (content.tags && Array.isArray(content.tags) && content.tags.length > 0) {
+        quillTags.setText(content.tags.join(', '));
+    }
+}
+
+// Quill 에디터 내용을 JSON 형식으로 변환
+function quillContentToJSON() {
+    if (!quillTitle || !quillBody || !quillTags) {
+        return null;
+    }
+
+    const titleDelta = quillTitle.getContents();
+    const bodyDelta = quillBody.getContents();
+    
+    // 본문 Delta를 줄 단위로 분해
+    const bodyOps = (bodyDelta && bodyDelta.ops) || [];
+    const lines = []; // { type: 'text'|'image', delta?, attrs?, src? }
+    let currentLineOps = [];
+    
+    bodyOps.forEach(op => {
+        if (typeof op.insert === 'string') {
+            if (op.insert === '\n') {
+                // 줄 종료 (블록 속성 포함)
+                lines.push({
+                    type: 'text',
+                    delta: { ops: currentLineOps },
+                    attrs: op.attributes || {}
+                });
+                currentLineOps = [];
+            } else if (op.insert.includes('\n')) {
+                const parts = op.insert.split('\n');
+                parts.forEach((part, idx) => {
+                    if (part.length > 0) {
+                        currentLineOps.push({
+                            insert: part,
+                            attributes: op.attributes
+                        });
+                    }
+                    if (idx < parts.length - 1) {
+                        lines.push({
+                            type: 'text',
+                            delta: { ops: currentLineOps },
+                            attrs: op.attributes || {}
+                        });
+                        currentLineOps = [];
+                    }
+                });
+            } else {
+                currentLineOps.push(op);
+            }
+        } else if (op.insert && op.insert.image) {
+            // 이전에 쌓인 텍스트 라인 flush
+            if (currentLineOps.length > 0) {
+                lines.push({
+                    type: 'text',
+                    delta: { ops: currentLineOps },
+                    attrs: {}
+                });
+                currentLineOps = [];
+            }
+            
+            lines.push({
+                type: 'image',
+                src: op.insert.image,
+                attrs: op.attributes || {}
+            });
+        }
+    });
+    
+    // 마지막 라인 flush
+    if (currentLineOps.length > 0) {
+        lines.push({
+            type: 'text',
+            delta: { ops: currentLineOps },
+            attrs: {}
+        });
+    }
+    
+    // 섹션 구성: header=2 는 소제목, 그 외는 paragraph
+    const body = [];
+    let currentSection = null;
+    let imageIndex = 1;
+    
+    const ensureDefaultSection = () => {
+        if (!currentSection) {
+            currentSection = {
+                subtitle: {
+                    content: '본문',
+                    style: { font_size: 20, bold: true }
+                },
+                blocks: []
+            };
+            body.push(currentSection);
+        }
+    };
+    
+    lines.forEach(line => {
+        if (line.type === 'image') {
+            ensureDefaultSection();
+            const src = line.src || '';
+            const caption = (window.imageCaptionMap && window.imageCaptionMap[src]) || '';
+            const placeholder = caption || `[이미지 ${imageIndex}]`;
+            
+            currentSection.blocks.push({
+                type: 'image_placeholder',
+                placeholder: placeholder,
+                image_prompt: '',
+                index: imageIndex
+            });
+            imageIndex++;
+        } else if (line.type === 'text' && line.delta && line.delta.ops && line.delta.ops.length > 0) {
+            const lineData = quillDeltaToStyle(line.delta);
+            if (!lineData.content) {
+                return;
+            }
+            
+            const isHeader2 = line.attrs && line.attrs.header === 2;
+            
+            if (isHeader2) {
+                currentSection = {
+                    subtitle: {
+                        content: lineData.content,
+                        style: Object.assign({}, lineData.style, { bold: true })
+                    },
+                    blocks: []
+                };
+                body.push(currentSection);
+            } else {
+                ensureDefaultSection();
+                const style = Object.assign({}, lineData.style);
+                if (line.attrs && line.attrs.blockquote) {
+                    style.quote = true;
+                }
+                currentSection.blocks.push({
+                    type: 'paragraph',
+                    content: lineData.content,
+                    style: style
+                });
+            }
+        }
+    });
+
+    // 제목
+    const titleData = quillDeltaToStyle(titleDelta);
+    const title = {
+        content: titleData.content,
+        style: titleData.style
+    };
+
+    // 태그
+    const tagsText = quillTags.getText();
+    const tags = tagsText.split(',').map(tag => tag.trim()).filter(tag => tag);
+
+    return {
+        title: title,
+        introduction: { content: '', style: {} },
+        body: body,
+        conclusion: { content: '', style: {} },
+        faq: [],
+        tags: tags
+    };
 }
 
