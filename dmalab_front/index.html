@@ -17,7 +17,8 @@
 
         <div class="tabs">
             <button class="tab-btn" data-tab="process">네이버 상위 블로그 분석</button>
-            <button class="tab-btn active" data-tab="generate">GPT 블로그 생성</button>
+            <button class="tab-btn active" data-tab="generate">블로그 생성</button>
+            <button class="tab-btn" data-tab="ideas">블로그 아이디어 생성</button>
         </div>
 
         <div class="content">
@@ -60,7 +61,7 @@
             <!-- GPT 블로그 생성 탭 -->
             <div id="generate-tab" class="tab-content active">
                 <div class="form-section">
-                    <h2>GPT 블로그 생성</h2>
+                    <h2>블로그 생성</h2>
                     
                     <div class="form-group">
                         <label class="required">키워드</label>
@@ -170,60 +171,65 @@
                         <div id="loading-steps" class="loading-steps"></div>
                     </div>
                 </div>
+            </div>
 
-                <!-- 블로그 아이디어 생성 섹션 -->
-                <div class="form-section" id="ideas-generator-section">
+            <!-- 블로그 아이디어 생성 탭 -->
+            <div id="ideas-tab" class="tab-content">
+                <div class="form-section">
                     <h2>블로그 아이디어 생성 (제목 + 작성 프롬프트)</h2>
-                    
+
                     <div class="form-group">
                         <label class="required">대표 키워드</label>
                         <input type="text" id="ideas-keyword" placeholder="예: 아임웹 홈페이지 제작" maxlength="100" required>
-                        <small class="form-help">이 키워드를 중심으로 여러 개의 블로그 제목과 작성 프롬프트를 제안합니다. (최대 100자)</small>
+                        <small class="form-help">핵심 키워드를 1~2개 정도 입력하세요. (예: 아임웹 홈페이지 제작, 스마트스토어 마케팅)</small>
                     </div>
 
                     <div class="form-group">
-                        <label class="required">주제</label>
-                        <input type="text" id="ideas-topic" placeholder="예: 소상공인을 위한 아임웹 홈페이지 제작 가이드" maxlength="150" required>
-                        <small class="form-help">글의 전체적인 주제나 방향을 한 문장 정도로 적어주세요.</small>
+                        <label class="required">주제 / 방향</label>
+                        <input type="text" id="ideas-topic" placeholder="예: 소상공인을 위한 홈페이지 제작 가이드" maxlength="150">
+                        <small class="form-help">이 키워드로 어떤 방향의 글을 쓰고 싶은지 한 문장으로 적어주세요. (체크박스 선택 시 비워도 됩니다)</small>
+                        <div class="checkbox-group" style="margin-top: 6px;">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="ideas-auto-topic">
+                                <span>주제 / 방향을 GPT에게 추천받기 (키워드와 블로그 특징만으로 자동 설정)</span>
+                            </label>
+                        </div>
                     </div>
 
                     <div class="form-group">
                         <label class="required">내 블로그의 특징</label>
-                        <textarea id="ideas-blog-profile" rows="3" placeholder="예: 소상공인/자영업자를 대상으로 하는 마케팅/홈페이지 제작 팁을 다루는 블로그입니다. 친절하고 자세한 설명, 실제 사례 중심의 콘텐츠를 좋아합니다."></textarea>
-                        <small class="form-help">블로그의 타깃, 톤, 다루는 주제, 운영 스타일 등을 자유롭게 적어주세요.</small>
+                        <textarea id="ideas-blog-profile" rows="3" placeholder="예: 
+- 주 타깃: 30대 여성 자영업자
+- 톤: 친근하지만 전문적인 느낌
+- 주로 다루는 내용: 온라인 마케팅, 홈페이지 제작 사례 공유" maxlength="500"></textarea>
+                        <small class="form-help">블로그 톤, 타깃, 주로 다루는 주제 등을 자유롭게 적어주세요. 아이디어에 최대한 반영됩니다.</small>
                     </div>
 
                     <div class="form-group">
                         <label>추가 프롬프트 (선택)</label>
-                        <textarea id="ideas-extra-prompt" rows="3" placeholder="예: 제목에는 숫자를 포함하고, 프롬프트에는 SEO 키워드 배치 방법을 꼭 포함해 주세요."></textarea>
-                        <small class="form-help">제목/프롬프트에 꼭 반영되었으면 하는 추가 요구사항이 있다면 적어주세요.</small>
+                        <textarea id="ideas-extra-prompt" rows="3" placeholder="예: 
+- 제목에는 반드시 '아임웹' 키워드가 들어가게 해줘
+- 프롬프트에는 도입-본문-결론 구조를 꼭 포함해줘
+- 글 길이는 최소 2500자 이상을 목표로 해줘" maxlength="600"></textarea>
+                        <small class="form-help">제목/프롬프트에 꼭 반영되었으면 하는 추가 요구사항을 적어주세요.</small>
                     </div>
 
                     <div class="form-group">
-                        <label>생성 개수 (1~10)</label>
+                        <label class="required">생성 개수</label>
                         <input type="number" id="ideas-count" value="3" min="1" max="10">
-                        <small class="form-help">한 번에 생성할 아이디어 개수를 선택하세요. 최대 10개까지 생성됩니다.</small>
+                        <small class="form-help">1개 ~ 10개까지 한 번에 생성할 수 있습니다.</small>
                     </div>
 
-                    <button type="button" onclick="handleGenerateIdeas()">아이디어 생성</button>
+                    <button id="ideas-generate-btn" onclick="handleGenerateIdeas()">아이디어 생성</button>
+                    <p id="ideas-status" class="status-text" style="display: none; margin-top: 8px; font-size: 0.9rem; color: #667eea;">
+                        아이디어 생성 중입니다...
+                    </p>
 
-                    <!-- 아이디어 전용 로딩 영역 -->
-                    <div id="ideas-loading" class="loading" style="display: none; margin-top: 20px;">
+                    <!-- 아이디어 탭에서도 공용 로딩 영역 사용 -->
+                    <div id="loading" class="loading" style="display: none; margin-top: 20px;">
                         <div class="spinner"></div>
-                        <p id="ideas-loading-message">아이디어 생성 중...</p>
-                    </div>
-
-                    <!-- 아이디어 결과 영역 -->
-                    <div id="ideas-result" class="result ideas-result" style="display: none; margin-top: 20px;">
-                        <div class="result-header">
-                            <h3>생성된 블로그 아이디어</h3>
-                            <div class="result-actions" id="ideas-result-actions">
-                                <!-- ZIP 다운로드 버튼이 여기에 동적으로 추가됩니다 -->
-                            </div>
-                        </div>
-                        <div id="ideas-result-content" class="ideas-result-content">
-                            <!-- JS에서 결과 리스트가 렌더링됩니다 -->
-                        </div>
+                        <p id="loading-message">처리 중...</p>
+                        <div id="loading-steps" class="loading-steps"></div>
                     </div>
                 </div>
             </div>
@@ -262,6 +268,19 @@
                         </button>
                     </div>
                 </div>
+            </div>
+
+            <!-- 블로그 아이디어 결과 영역 -->
+            <div id="ideas-result" class="result" style="display: none;">
+                <div class="result-header">
+                    <h3>생성된 블로그 아이디어</h3>
+                    <div class="result-actions">
+                        <button id="ideas-download-zip-btn" class="btn-export" style="display: none;">
+                            전체 다운로드
+                        </button>
+                    </div>
+                </div>
+                <div id="ideas-result-content"></div>
             </div>
         </div>
     </div>

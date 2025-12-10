@@ -43,7 +43,7 @@ def load_prompt_template() -> Dict[str, Any]:
     """
     current_dir = Path(__file__).parent
     project_dir = current_dir.parent
-    template_path = project_dir / "config" / "prompt_template.json"
+    template_path = project_dir / "data" / "config" / "prompt_template.json"
     
     with open(template_path, 'r', encoding='utf-8') as f:
         return json.load(f)
@@ -58,7 +58,7 @@ def load_default_ban_words() -> List[str]:
     """
     current_dir = Path(__file__).parent
     project_dir = current_dir.parent
-    ban_words_path = project_dir / "config" / "default_ban_words.json"
+    ban_words_path = project_dir / "data" / "config" / "default_ban_words.json"
     
     try:
         with open(ban_words_path, 'r', encoding='utf-8') as f:
@@ -280,7 +280,7 @@ def get_create_naver_directory() -> Path:
     """
     current_dir = Path(__file__).parent
     project_dir = current_dir.parent
-    base_dir = project_dir / "blog" / "create_naver"
+    base_dir = project_dir / "data" / "blog" / "create_naver"
     base_dir.mkdir(parents=True, exist_ok=True)
     
     # 오늘 날짜 형식: yyyymmdd
@@ -387,6 +387,7 @@ def generate_blog_ideas(
     count: int = 3,
     model: str = "gpt-4o-mini",
     temperature: float = 0.7,
+    auto_topic: bool = False,
 ) -> List[Dict[str, str]]:
     """
     GPT API를 사용하여 블로그 제목과 작성 프롬프트 아이디어를 여러 개 생성합니다.
@@ -413,18 +414,25 @@ def generate_blog_ideas(
 
     system_prompt = (
         "너는 네이버 블로그 마케터이자 컨설턴트야. "
-        "사용자가 준 대표 키워드, 주제, 블로그 특징을 보고, "
+        "사용자가 준 대표 키워드, 주제(또는 자동으로 정해야 할 방향), 블로그 특징을 보고, "
         "실제 블로그 글을 쓸 때 바로 사용할 수 있는 '제목'과 "
         "'작성 지시 프롬프트'를 여러 개 제안해 줘.\n\n"
         "- 제목은 클릭을 유도하지만 과도한 낚시는 피하고, 네이버 블로그에 자연스러운 한국어로 작성해.\n"
         "- 작성 프롬프트는 ChatGPT/GPT에게 그대로 붙여넣어 쓰기 좋은 형태로, "
         "톤, 타깃, 구성(도입-본문-결론), SEO 관점에서의 키워드 사용 지침 등을 구체적으로 포함해.\n"
-        "- 모든 내용은 한국어로 작성해."
+        "- 모든 내용은 한국어로 작성해.\n"
+        "- 사용자가 별도의 주제를 주지 않고 '자동 추천'을 요청한 경우, 각 아이디어마다 자연스럽고 구체적인 주제/방향을 네가 먼저 상상해서 그에 맞는 제목과 프롬프트를 만들어."
     )
+
+    # 주제 설명 구성 (자동 추천 여부에 따라 문구 변경)
+    if auto_topic and not topic:
+        topic_desc = "사용자가 직접 주제를 정하지 않았으므로, 대표 키워드와 블로그 특징에 가장 잘 맞는 주제를 네가 각 아이디어별로 자연스럽게 정해줘."
+    else:
+        topic_desc = topic
 
     user_prompt_parts = [
         f"- 대표 키워드: {keyword}",
-        f"- 주제: {topic}",
+        f"- 주제: {topic_desc}",
         f"- 내 블로그 특징: {blog_profile}",
         f"- 생성 개수: {count}개",
     ]
@@ -444,7 +452,8 @@ def generate_blog_ideas(
         "    }\n"
         "  ]\n"
         "}\n"
-        f'"ideas" 배열 길이는 반드시 {count}로 맞춰 줘.'
+        f'"ideas" 배열 길이는 반드시 {count}로 맞춰 줘.\n'
+        "주의: 별도의 '주제' 필드는 JSON에 추가하지 말고, 네가 정한 주제/방향을 title과 prompt 내용 안에 자연스럽게 반영해."
     )
 
     try:

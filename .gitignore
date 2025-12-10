@@ -54,5 +54,9 @@ naver_state.json
 naver_crawler/
 create_naver/
 export_blog/
+create_blog_prompt/
+
+# data 디렉토리 (생성된 파일, 설정 파일 등)
+data/
 
 

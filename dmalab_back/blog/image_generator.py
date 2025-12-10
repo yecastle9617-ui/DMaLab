@@ -51,7 +51,7 @@ def load_image_prompt_guide() -> Dict[str, Any]:
     if _image_prompt_guide is None:
         current_dir = Path(__file__).parent
         project_dir = current_dir.parent
-        guide_path = project_dir / "config" / "image_prompt_guide.json"
+        guide_path = project_dir / "data" / "config" / "image_prompt_guide.json"
         
         try:
             with open(guide_path, 'r', encoding='utf-8') as f:

@@ -1,4 +1,5 @@
 from playwright.sync_api import sync_playwright
+from pathlib import Path
 import time
 import random
 import os
@@ -164,9 +165,14 @@ def login_naver():
             else:
                 print("✔ 자동 로그인 성공")
 
-            # 로그인 완료 후 쿠키 상태 저장
-            context.storage_state(path="naver_state.json")
-            print("✔ 로그인 세션 저장 완료 (naver_state.json)")
+            # 로그인 완료 후 쿠키 상태 저장 (data/ 하위)
+            current_dir = Path(__file__).parent
+            project_dir = current_dir.parent
+            data_dir = project_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            naver_state_path = data_dir / "naver_state.json"
+            context.storage_state(path=str(naver_state_path))
+            print(f"✔ 로그인 세션 저장 완료 ({naver_state_path})")
             
             browser.close()
     except Exception as e:

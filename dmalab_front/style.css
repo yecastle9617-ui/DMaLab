@@ -323,6 +323,87 @@ button:disabled {
     border: 2px solid #e0e0e0;
 }
 
+/* 블로그 아이디어 결과 영역 전용 스타일 */
+.ideas-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.idea-card {
+    background: #ffffff;
+    border-radius: 8px;
+    border: 1px solid #e0e0e0;
+    padding: 16px 18px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
+}
+
+.idea-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.idea-index {
+    font-weight: 600;
+    color: #667eea;
+    font-size: 0.95rem;
+}
+
+.idea-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.idea-title-row,
+.idea-prompt-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.idea-title-row label,
+.idea-prompt-row label {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #555;
+}
+
+.idea-title-text {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #222;
+}
+
+.idea-prompt-text {
+    width: 100%;
+    min-height: 90px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    border: 1px solid #ddd;
+    resize: vertical;
+    font-size: 0.92rem;
+    line-height: 1.6;
+}
+
+.btn-copy-small {
+    align-self: flex-start;
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    background: #f0f0f5;
+    color: #333;
+    border-radius: 4px;
+    cursor: pointer;
+    border: none;
+    margin-top: 4px;
+}
+
+.btn-copy-small:hover {
+    background: #e0e0f0;
+}
+
 .result-header {
     display: flex;
     justify-content: space-between;
@@ -661,6 +742,51 @@ button:disabled {
     border-color: #667eea;
     background: #e3e7ff;
     color: #333;
+}
+
+/* 토글 스타일 버튼 (이미지 스타일용) */
+.blog-editor .image-style-toggle-btn {
+    position: relative;
+    padding: 2px 8px 2px 26px;
+    border-radius: 12px;
+    background: #f1f1f1;
+    border-color: #d0d0d0;
+    font-size: 11px;
+}
+
+.blog-editor .image-style-toggle-btn::before {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 9px;
+    border-radius: 999px;
+    background: #ccc;
+    transition: background 0.15s ease;
+}
+
+.blog-editor .image-style-toggle-btn::after {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 50%;
+    transform: translate(0, -50%);
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 0 2px rgba(0,0,0,0.2);
+    transition: transform 0.15s ease;
+}
+
+.blog-editor .image-style-toggle-btn.active::before {
+    background: #667eea;
+}
+
+.blog-editor .image-style-toggle-btn.active::after {
+    transform: translate(7px, -50%);
 }
 
 .image-caption-row {

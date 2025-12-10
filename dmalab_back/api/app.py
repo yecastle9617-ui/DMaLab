@@ -57,13 +57,21 @@ project_dir = current_dir.parent
 NAVER_CRAWLER_DIR = project_dir / "naver_crawler"
 NAVER_CRAWLER_DIR.mkdir(parents=True, exist_ok=True)
 
+# data 디렉토리 설정
+DATA_DIR = project_dir / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 # blog/create_naver 디렉토리 설정 (GPT 자동 생성용)
-CREATE_NAVER_DIR = project_dir / "blog" / "create_naver"
+CREATE_NAVER_DIR = DATA_DIR / "blog" / "create_naver"
 CREATE_NAVER_DIR.mkdir(parents=True, exist_ok=True)
 
 # blog/export_blog 디렉토리 설정 (에디터 역포맷/내보내기용)
-EXPORT_BLOG_DIR = project_dir / "blog" / "export_blog"
+EXPORT_BLOG_DIR = DATA_DIR / "blog" / "export_blog"
 EXPORT_BLOG_DIR.mkdir(parents=True, exist_ok=True)
+
+# blog/create_blog_prompt 디렉토리 설정 (블로그 아이디어 TXT/ZIP 저장용)
+CREATE_BLOG_PROMPT_DIR = DATA_DIR / "blog" / "create_blog_prompt"
+CREATE_BLOG_PROMPT_DIR.mkdir(parents=True, exist_ok=True)
 
 # 정적 파일 서빙 (naver_crawler 디렉토리 전체)
 app.mount("/static/naver_crawler", StaticFiles(directory=str(NAVER_CRAWLER_DIR)), name="static_naver_crawler")
@@ -73,6 +81,13 @@ app.mount("/static/blog/create_naver", StaticFiles(directory=str(CREATE_NAVER_DI
 
 # 정적 파일 서빙 (blog/export_blog 디렉토리 전체)
 app.mount("/static/blog/export_blog", StaticFiles(directory=str(EXPORT_BLOG_DIR)), name="static_export_blog")
+
+# 정적 파일 서빙 (blog/create_blog_prompt 디렉토리 전체)
+app.mount(
+    "/static/blog/create_blog_prompt",
+    StaticFiles(directory=str(CREATE_BLOG_PROMPT_DIR)),
+    name="static_create_blog_prompt",
+)
 
 # CORS 설정 (필요시 수정)
 app.add_middleware(
@@ -244,6 +259,8 @@ class ExportImageItem(BaseModel):
     index: int
     src: str
     style: Optional[str] = None
+    # 썸네일 여부 (프론트에서 선택한 경우 true)
+    is_thumbnail: Optional[bool] = None
     caption: Optional[str] = None
 
 
@@ -269,34 +286,7 @@ class GenerateBlogIdeasRequest(BaseModel):
     model: str = Field(default="gpt-4o-mini", description="사용할 GPT 모델")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="생성 온도")
     save_files: bool = Field(default=True, description="각 아이디어를 개별 텍스트 파일로 저장할지 여부")
-
-
-class BlogIdeaItem(BaseModel):
-    """단일 블로그 제목/프롬프트 아이디어"""
-    index: int
-    title: str
-    prompt: str
-    file_path: Optional[str] = None
-
-
-class GenerateBlogIdeasResponse(BaseModel):
-    """블로그 제목/프롬프트 아이디어 생성 응답 모델"""
-    success: bool
-    ideas: List[BlogIdeaItem] = []
-    zip_path: Optional[str] = None
-    error: Optional[str] = None
-
-
-class GenerateBlogIdeasRequest(BaseModel):
-    """블로그 제목/프롬프트 아이디어 생성 요청 모델"""
-    keyword: str = Field(..., description="대표 키워드")
-    topic: str = Field(..., description="글의 주제/카테고리")
-    blog_profile: str = Field(..., description="현재 내 블로그의 특징(톤, 타깃, 운영 스타일 등)")
-    extra_prompt: Optional[str] = Field(default=None, description="추가로 강조하고 싶은 프롬프트 내용 (선택)")
-    count: int = Field(default=3, ge=1, le=10, description="생성할 아이디어 개수 (1~10)")
-    model: str = Field(default="gpt-4o-mini", description="사용할 GPT 모델")
-    temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="생성 온도")
-    save_files: bool = Field(default=True, description="각 아이디어를 개별 텍스트 파일로 저장할지 여부")
+    auto_topic: bool = Field(default=False, description="주제/방향을 GPT에게 자동 추천받을지 여부")
 
 
 class BlogIdeaItem(BaseModel):
@@ -382,6 +372,36 @@ def get_export_blog_directory() -> Path:
     형식: blog/export_blog/yyyymmdd_1, yyyymmdd_2, ...
     """
     base_dir = EXPORT_BLOG_DIR
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    today = datetime.now().strftime("%Y%m%d")
+    dir_pattern = f"{today}_"
+    existing_dirs = [
+        d for d in base_dir.iterdir()
+        if d.is_dir() and d.name.startswith(dir_pattern)
+    ]
+
+    max_num = 0
+    for dir_path in existing_dirs:
+        try:
+            num = int(dir_path.name.split('_')[-1])
+            max_num = max(max_num, num)
+        except (ValueError, IndexError):
+            continue
+
+    next_num = max_num + 1
+    output_dir = base_dir / f"{today}_{next_num}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    return output_dir
+
+
+def get_create_blog_prompt_directory() -> Path:
+    """
+    blog/create_blog_prompt 디렉토리 내에 날짜별 번호 디렉토리를 생성합니다.
+    형식: blog/create_blog_prompt/yyyymmdd_1, yyyymmdd_2, ...
+    """
+    base_dir = CREATE_BLOG_PROMPT_DIR
     base_dir.mkdir(parents=True, exist_ok=True)
 
     today = datetime.now().strftime("%Y%m%d")
@@ -1393,7 +1413,10 @@ async def export_blog(request: ExportBlogRequest):
                 "index": img.index,
                 "placeholder": img.caption or "",
                 "image_path": relative_path,
-                "full_path": str(file_path)
+                "full_path": str(file_path),
+                # 에디터에서 설정한 메타데이터를 그대로 보존
+                "style": img.style,
+                "is_thumbnail": img.is_thumbnail,
             })
 
         if generated_images:
@@ -1455,7 +1478,8 @@ async def generate_blog_ideas_api(request: GenerateBlogIdeasRequest):
 
         if not keyword:
             raise ValueError("대표 키워드를 입력해 주세요.")
-        if not topic:
+        # auto_topic이 False인 경우에만 주제 필수
+        if not topic and not request.auto_topic:
             raise ValueError("주제를 입력해 주세요.")
         if not blog_profile:
             raise ValueError("내 블로그의 특징을 입력해 주세요.")
@@ -1465,7 +1489,8 @@ async def generate_blog_ideas_api(request: GenerateBlogIdeasRequest):
 
         logger.info(
             f"[IDEAS] keyword={keyword!r}, topic={topic!r}, "
-            f"count={count}, model={request.model!r}, temperature={request.temperature}"
+            f"count={count}, model={request.model!r}, temperature={request.temperature}, "
+            f"auto_topic={request.auto_topic}"
         )
 
         # 1) GPT로 아이디어 생성
@@ -1474,6 +1499,7 @@ async def generate_blog_ideas_api(request: GenerateBlogIdeasRequest):
             topic=topic,
             blog_profile=blog_profile,
             extra_prompt=request.extra_prompt,
+            auto_topic=request.auto_topic,
             count=count,
             model=request.model,
             temperature=request.temperature,
@@ -1491,7 +1517,8 @@ async def generate_blog_ideas_api(request: GenerateBlogIdeasRequest):
 
         # 2) 파일 저장 및 ZIP 생성 (save_files=True인 경우)
         if request.save_files:
-            output_dir = get_export_blog_directory()
+            # 블로그 아이디어 전용 디렉토리 (blog/create_blog_prompt/yyyymmdd_N)
+            output_dir = get_create_blog_prompt_directory()
 
             for idx, idea in enumerate(ideas_data, start=1):
                 title = idea.get("title", "").strip()
@@ -1509,11 +1536,11 @@ async def generate_blog_ideas_api(request: GenerateBlogIdeasRequest):
                     f.write(prompt_text)
                     f.write("\\n")
 
-                # 정적 서빙용 상대 경로 (/static/blog/export_blog/...)
+                # 정적 서빙용 상대 경로 (/static/blog/create_blog_prompt/...)
                 try:
-                    relative_to_base = file_path.relative_to(EXPORT_BLOG_DIR)
+                    relative_to_base = file_path.relative_to(CREATE_BLOG_PROMPT_DIR)
                     relative_path = str(relative_to_base).replace("\\\\", "/")
-                    static_path = f"/static/blog/export_blog/{relative_path}"
+                    static_path = f"/static/blog/create_blog_prompt/{relative_path}"
                 except ValueError:
                     static_path = str(file_path)
 
@@ -1536,11 +1563,11 @@ async def generate_blog_ideas_api(request: GenerateBlogIdeasRequest):
                         arcname = str(full_path.relative_to(output_dir)).replace("\\\\", "/")
                         zf.write(full_path, arcname)
 
-            # 정적 ZIP 경로 구성
+            # 정적 ZIP 경로 구성 (/static/blog/create_blog_prompt/...)
             try:
-                relative_zip = zip_path.relative_to(EXPORT_BLOG_DIR)
+                relative_zip = zip_path.relative_to(CREATE_BLOG_PROMPT_DIR)
                 zip_relative_path = str(relative_zip).replace("\\\\", "/")
-                zip_url_path = f"/static/blog/export_blog/{zip_relative_path}"
+                zip_url_path = f"/static/blog/create_blog_prompt/{zip_relative_path}"
             except ValueError:
                 zip_url_path = str(zip_path)
 
@@ -1588,9 +1615,9 @@ async def get_blog_json(filename: str):
         current_dir = Path(__file__).parent
         project_dir = current_dir.parent
         
-        # 검색할 디렉토리 목록 (blog/create_naver 우선, naver_crawler는 하위 호환성)
+        # 검색할 디렉토리 목록 (data/blog/create_naver 우선, naver_crawler는 하위 호환성)
         search_dirs = [
-            project_dir / "blog" / "create_naver",
+            DATA_DIR / "blog" / "create_naver",
             project_dir / "naver_crawler"
         ]
         
