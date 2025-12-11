@@ -10,7 +10,6 @@ body {
         sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     min-height: 100vh;
     padding: 20px;
 }
@@ -20,12 +19,11 @@ body {
     margin: 0 auto;
     background: white;
     border-radius: 16px;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
     overflow: hidden;
 }
 
 .header {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: #3BB1E2;
     color: white;
     padding: 40px;
     text-align: center;
@@ -68,8 +66,8 @@ body {
 }
 
 .tab-btn.active {
-    color: #667eea;
-    border-bottom-color: #667eea;
+    color: #333;
+    border-bottom-color: #3BB1E2;
     background: white;
 }
 
@@ -127,7 +125,7 @@ body {
 .form-group input:focus,
 .form-group textarea:focus {
     outline: none;
-    border-color: #667eea;
+    border-color: #3BB1E2;
 }
 
 .form-group textarea {
@@ -164,25 +162,35 @@ body {
     margin-top: 8px;
     padding: 6px 12px;
     font-size: 0.85rem;
-    background: #f0f0f5;
-    color: #333;
+    background: #f5f5f5;
+    color: #666;
+    border: 1px solid #ddd;
     border-radius: 4px;
+    transition: all 0.2s ease;
+    font-weight: 500;
 }
 
-.btn-secondary-small:hover {
-    background: #e0e0f0;
+.btn-secondary-small:hover:not(:disabled) {
+    background: #e8e8e8;
+    border-color: #bbb;
+    color: #333;
 }
 
 .btn-link-remove {
     padding: 6px 10px;
     font-size: 0.8rem;
     background: #ffecec;
-    color: #c33;
+    color: #d32f2f;
+    border: 1px solid #ffcccb;
     border-radius: 4px;
+    transition: all 0.2s ease;
+    font-weight: 500;
 }
 
 .btn-link-remove:hover {
-    background: #ffdddd;
+    background: #ff6b6b;
+    border-color: #ff5252;
+    color: #ffffff;
 }
 
 .form-group label {
@@ -219,7 +227,12 @@ body {
     cursor: pointer;
     width: 20px;
     height: 20px;
-    accent-color: #667eea;
+    accent-color: #888;
+}
+
+.checkbox-label input[type="checkbox"]:checked {
+    accent-color: #888;
+    background-color: #888;
 }
 
 .checkbox-label span {
@@ -228,7 +241,7 @@ body {
 }
 
 button {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: #3BB1E2;
     color: white;
     border: none;
     padding: 14px 32px;
@@ -236,13 +249,14 @@ button {
     font-size: 1rem;
     font-weight: 600;
     cursor: pointer;
-    transition: transform 0.2s, box-shadow 0.2s;
+    transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
     margin-top: 10px;
 }
 
-button:hover:not(:disabled) {
+button:hover:not(:disabled):not(.btn-secondary-small):not(.btn-link-remove) {
+    background: #52c8ef;
     transform: translateY(-2px);
-    box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
+    box-shadow: 0 8px 20px rgba(59, 177, 226, 0.4);
 }
 
 button:disabled {
@@ -293,7 +307,7 @@ button:disabled {
 
 .spinner {
     border: 4px solid #f3f3f3;
-    border-top: 4px solid #667eea;
+    border-top: 4px solid #3BB1E2;
     border-radius: 50%;
     width: 50px;
     height: 50px;
@@ -347,7 +361,7 @@ button:disabled {
 
 .idea-index {
     font-weight: 600;
-    color: #667eea;
+    color: #3BB1E2;
     font-size: 0.95rem;
 }
 
@@ -420,7 +434,7 @@ button:disabled {
 
 .btn-copy {
     padding: 10px 20px;
-    background: #667eea;
+    background: #3BB1E2;
     color: white;
     border: none;
     border-radius: 6px;
@@ -431,15 +445,15 @@ button:disabled {
 }
 
 .btn-copy:hover {
-    background: #5568d3;
+    background: #52c8ef;
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    box-shadow: 0 4px 12px rgba(59, 177, 226, 0.4);
 }
 
 /* 네이버 발행용 파일 다운로드 버튼 */
 .btn-export {
     padding: 10px 20px;
-    background: #667eea;
+    background: #3BB1E2;
     color: white;
     border: 1px solid #ccc;
     border-radius: 6px;
@@ -451,9 +465,9 @@ button:disabled {
 }
 
 .btn-export:hover {
-    background: #5568d3;
+    background: #52c8ef;
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    box-shadow: 0 4px 12px rgba(59, 177, 226, 0.4);
 }
 
 .blog-editor-sections {
@@ -502,13 +516,22 @@ button:disabled {
     padding: 12px 16px;
 }
 
+/* 에디터 내 이미지 크기 제한 (너비 기준 400px) */
+.blog-editor .ql-editor img {
+    max-width: 400px;
+    width: auto;
+    height: auto;
+    display: block;
+    margin: 10px auto;
+}
+
 .blog-editor .ql-editor.ql-blank::before {
     font-style: normal;
     color: #999;
 }
 
 .blog-editor:focus-within {
-    outline: 2px solid #667eea;
+    outline: 2px solid #3BB1E2;
     outline-offset: 2px;
 }
 
@@ -679,13 +702,13 @@ button:disabled {
 }
 
 .autosave-btn-primary {
-    background: #667eea;
+    background: #3BB1E2;
     color: #fff;
-    border-color: #667eea;
+    border-color: #3BB1E2;
 }
 
 .autosave-btn-primary:hover {
-    background: #5568d3;
+    background: #52c8ef;
 }
 
 .autosave-btn-secondary {
@@ -739,7 +762,7 @@ button:disabled {
 }
 
 .blog-editor .image-style-toolbar button.active {
-    border-color: #667eea;
+    border-color: #3BB1E2;
     background: #e3e7ff;
     color: #333;
 }
@@ -782,7 +805,7 @@ button:disabled {
 }
 
 .blog-editor .image-style-toggle-btn.active::before {
-    background: #667eea;
+    background: #3BB1E2;
 }
 
 .blog-editor .image-style-toggle-btn.active::after {
@@ -835,7 +858,7 @@ button:disabled {
 }
 
 .blog-editor .image-style-toolbar button.active {
-    border-color: #667eea;
+    border-color: #3BB1E2;
     background: #e3e7ff;
     color: #333;
 }
@@ -980,7 +1003,7 @@ button:disabled {
 }
 
 .result-summary strong {
-    color: #667eea;
+    color: #3BB1E2;
 }
 
 .result-status {
@@ -1023,7 +1046,7 @@ button:disabled {
 }
 
 .blog-rank {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: #3BB1E2;
     color: white;
     padding: 8px 16px;
     border-radius: 6px;
@@ -1044,7 +1067,7 @@ button:disabled {
 }
 
 .blog-url {
-    color: #667eea;
+    color: #3BB1E2;
     text-decoration: none;
     font-size: 0.9rem;
     word-break: break-all;
@@ -1068,7 +1091,7 @@ button:disabled {
 }
 
 .crawl-info a {
-    color: #667eea;
+    color: #3BB1E2;
     text-decoration: none;
     word-break: break-all;
 }
@@ -1133,6 +1156,84 @@ button:disabled {
     color: #721c24;
 }
 
+/* 상위 블로그 분석 결과 필드 스타일 */
+.result-field {
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid #f0f0f0;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+.result-field:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
+}
+
+.body-text-field {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow: visible;
+}
+
+.body-text-field .body-text {
+    overflow: visible;
+    max-height: none;
+}
+
+.field-label {
+    display: block;
+    margin-bottom: 8px;
+    color: #3BB1E2;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.result-link {
+    color: #3BB1E2;
+    text-decoration: none;
+    word-break: break-all;
+    font-size: 0.9rem;
+}
+
+.result-link:hover {
+    text-decoration: underline;
+    color: #52c8ef;
+}
+
+
+.body-length {
+    color: #666;
+    font-size: 1rem;
+    font-weight: 500;
+}
+
+.result-field .body-text {
+    margin-top: 10px;
+    background: #f9f9f9;
+    padding: 15px;
+    border-radius: 6px;
+    line-height: 1.8;
+    color: #333;
+    word-wrap: break-word;
+    border: 1px solid #e0e0e0;
+    font-size: 0.95rem;
+    width: 100%;
+    min-width: 100%;
+    box-sizing: border-box;
+    overflow: visible;
+}
+
+/* .body-text-container 내부의 .body-text는 별도 스타일 유지 */
+.body-text-container .body-text {
+    background: #ffffff;
+    padding: 20px;
+    max-height: 500px;
+}
+
 .crawl-results-list,
 .process-results-list {
     display: flex;
@@ -1145,8 +1246,10 @@ button:disabled {
     background: white;
     border: 2px solid #e0e0e0;
     border-radius: 8px;
-    overflow: hidden;
+    overflow: visible;
     transition: box-shadow 0.3s;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 .crawl-result-card:hover,
@@ -1171,12 +1274,27 @@ button:disabled {
     padding: 12px 20px;
     background: #f8f9fa;
     border-bottom: 1px solid #e0e0e0;
+    transition: background-color 0.2s;
+}
+
+.result-card-header:hover {
+    background: #e9ecef;
+}
+
+.card-toggle-icon {
+    font-size: 0.9rem;
+    color: #666;
+    transition: transform 0.2s;
+}
+
+.result-card-body {
+    padding: 20px;
 }
 
 .result-index,
 .result-rank {
     font-weight: 600;
-    color: #667eea;
+    color: #3BB1E2;
 }
 
 .result-status-badge {
@@ -1198,12 +1316,17 @@ button:disabled {
 
 .result-card-body {
     padding: 20px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
 }
 
 .result-title {
-    margin: 0 0 15px 0;
+    margin: 8px 0 0 0;
     color: #333;
     font-size: 1.1rem;
+    font-weight: 600;
+    line-height: 1.4;
 }
 
 .result-card-body p {
@@ -1213,7 +1336,7 @@ button:disabled {
 }
 
 .result-card-body a {
-    color: #667eea;
+    color: #3BB1E2;
     text-decoration: none;
     word-break: break-all;
 }
@@ -1246,7 +1369,7 @@ button:disabled {
 }
 
 .keyword-table thead {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: #3BB1E2;
     color: white;
 }
 
@@ -1271,7 +1394,7 @@ button:disabled {
 
 .rank-cell {
     font-weight: 600;
-    color: #667eea;
+    color: #3BB1E2;
     width: 80px;
 }
 
@@ -1300,7 +1423,7 @@ button:disabled {
 
 .keyword-tag {
     background: #e7e9fd;
-    color: #667eea;
+    color: #3BB1E2;
     padding: 6px 12px;
     border-radius: 16px;
     font-size: 0.85rem;
@@ -1379,7 +1502,7 @@ button:disabled {
     display: block;
     padding: 8px;
     text-align: center;
-    background: #667eea;
+    background: #3BB1E2;
     color: white;
     text-decoration: none;
     font-size: 0.85rem;
@@ -1388,7 +1511,7 @@ button:disabled {
 }
 
 .image-link:hover {
-    background: #5568d3;
+    background: #52c8ef;
 }
 
 /* 링크 표시 스타일 */
@@ -1414,11 +1537,11 @@ button:disabled {
     padding: 12px;
     background: #f8f9fa;
     border-radius: 6px;
-    border-left: 3px solid #667eea;
+    border-left: 3px solid #3BB1E2;
 }
 
 .link-item a {
-    color: #667eea;
+    color: #3BB1E2;
     text-decoration: none;
     word-break: break-all;
     font-size: 0.9rem;
@@ -1520,7 +1643,7 @@ button:disabled {
 .blog-blocks blockquote {
     margin: 20px 0;
     padding: 15px 20px;
-    border-left: 4px solid #667eea;
+    border-left: 4px solid #3BB1E2;
     background: #f5f5f5;
     font-style: italic;
 }
@@ -1549,7 +1672,7 @@ button:disabled {
 
 .faq-item h3 {
     margin-top: 0;
-    color: #667eea;
+    color: #3BB1E2;
 }
 
 .blog-tags {
@@ -1562,7 +1685,7 @@ button:disabled {
     display: inline-block;
     margin: 5px 10px 5px 0;
     padding: 5px 12px;
-    background: #667eea;
+    background: #3BB1E2;
     color: white;
     border-radius: 20px;
     font-size: 0.9rem;
@@ -1581,7 +1704,7 @@ button:disabled {
 
 .form-group select:focus {
     outline: none;
-    border-color: #667eea;
+    border-color: #3BB1E2;
 }
 
 .form-group select:disabled {
@@ -1622,7 +1745,7 @@ details {
 details summary {
     cursor: pointer;
     font-weight: 600;
-    color: #667eea;
+    color: #3BB1E2;
     margin-bottom: 10px;
 }
 

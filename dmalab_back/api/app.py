@@ -12,8 +12,14 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Dict, Any
 from urllib.parse import quote, unquote, urlparse
 import hashlib
+from dotenv import load_dotenv
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+# .env 파일 로드 (프로젝트 루트에서)
+current_dir = Path(__file__).parent
+project_root = current_dir.parent.parent  # DMaLab 디렉토리
+load_dotenv(project_root / ".env")
+
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +29,12 @@ import requests
 import zipfile
 import base64
 import mimetypes
+import json
+import uuid
+import asyncio
+from collections import defaultdict
+from datetime import datetime, timedelta
+from enum import Enum
 
 from crawler.naver_crawler import NaverCrawler
 from analyzer.morpheme_analyzer import MorphemeAnalyzer
@@ -62,6 +74,491 @@ DATA_DIR = project_dir / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # blog/create_naver 디렉토리 설정 (GPT 자동 생성용)
+
+# ===== 사용량 제한 시스템 =====
+# Admin IP 목록 (환경 변수에서 읽기, 쉼표로 구분)
+ADMIN_IPS = os.getenv("ADMIN_IPS", "").split(",")
+ADMIN_IPS = [ip.strip() for ip in ADMIN_IPS if ip.strip()]
+
+# 일일 사용량 제한 (기본 3회)
+DAILY_LIMIT = int(os.getenv("DAILY_LIMIT", "3"))
+
+# 상위 블로그 분석 일일 제한 (기본 5회)
+REFERENCE_ANALYSIS_LIMIT = int(os.getenv("REFERENCE_ANALYSIS_LIMIT", "5"))
+
+# 블로그 아이디어 생성 일일 제한 (기본 3회)
+BLOG_IDEAS_LIMIT = int(os.getenv("BLOG_IDEAS_LIMIT", "3"))
+
+# 사용량 추적 (메모리 기반) - AI 블로그(이미지) 생성용
+# 구조: {ip: {"count": 0, "reset_time": datetime}}
+usage_tracker = defaultdict(lambda: {"count": 0, "reset_time": datetime.now() + timedelta(days=1)})
+
+# 상위 블로그 분석 사용량 추적 (메모리 기반)
+# 구조: {ip: {"count": 0, "reset_time": datetime}}
+reference_analysis_tracker = defaultdict(lambda: {"count": 0, "reset_time": datetime.now() + timedelta(days=1)})
+
+# 블로그 아이디어 생성 사용량 추적 (메모리 기반)
+# 구조: {ip: {"count": 0, "reset_time": datetime}}
+blog_ideas_tracker = defaultdict(lambda: {"count": 0, "reset_time": datetime.now() + timedelta(days=1)})
+
+# 사용량 추적 JSON 파일 경로
+USAGE_DATA_FILE = DATA_DIR / "usage_data.json"
+
+# ===== 사용량 데이터 JSON 파일 관리 =====
+def load_usage_data() -> Dict[str, Any]:
+    """JSON 파일에서 사용량 데이터를 로드합니다."""
+    if not USAGE_DATA_FILE.exists():
+        return {
+            "blog_generation": {},
+            "reference_analysis": {},
+            "blog_ideas": {},
+            "first_seen": {}  # IP별 첫 접속 시간
+        }
+    
+    try:
+        with open(USAGE_DATA_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # datetime 문자열을 datetime 객체로 변환
+        for tracker_name in ["blog_generation", "reference_analysis", "blog_ideas"]:
+            if tracker_name in data:
+                for ip, usage_info in data[tracker_name].items():
+                    if "reset_time" in usage_info and isinstance(usage_info["reset_time"], str):
+                        usage_info["reset_time"] = datetime.fromisoformat(usage_info["reset_time"])
+        
+        return data
+    except Exception as e:
+        logger.exception(f"[USAGE_DATA] JSON 파일 로드 오류: {e}")
+        return {
+            "blog_generation": {},
+            "reference_analysis": {},
+            "blog_ideas": {},
+            "first_seen": {}
+        }
+
+def save_usage_data():
+    """사용량 데이터를 JSON 파일에 저장합니다."""
+    try:
+        # datetime 객체를 문자열로 변환
+        data = {
+            "blog_generation": {},
+            "reference_analysis": {},
+            "blog_ideas": {},
+            "first_seen": {}
+        }
+        
+        # 각 트래커의 데이터를 복사 (datetime을 문자열로 변환)
+        for ip, usage_info in usage_tracker.items():
+            data["blog_generation"][ip] = {
+                "count": usage_info["count"],
+                "reset_time": usage_info["reset_time"].isoformat()
+            }
+        
+        for ip, usage_info in reference_analysis_tracker.items():
+            data["reference_analysis"][ip] = {
+                "count": usage_info["count"],
+                "reset_time": usage_info["reset_time"].isoformat()
+            }
+        
+        for ip, usage_info in blog_ideas_tracker.items():
+            data["blog_ideas"][ip] = {
+                "count": usage_info["count"],
+                "reset_time": usage_info["reset_time"].isoformat()
+            }
+        
+        # first_seen 데이터는 별도로 관리 (IP별 첫 접속 시간)
+        # 기존 데이터가 있으면 유지
+        existing_data = load_usage_data()
+        if "first_seen" in existing_data:
+            data["first_seen"] = existing_data["first_seen"]
+        
+        # JSON 파일에 저장
+        with open(USAGE_DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        
+        logger.debug(f"[USAGE_DATA] 사용량 데이터 저장 완료")
+    except Exception as e:
+        logger.exception(f"[USAGE_DATA] JSON 파일 저장 오류: {e}")
+
+def initialize_usage_trackers():
+    """서버 시작 시 JSON 파일에서 사용량 데이터를 로드하여 트래커를 초기화합니다."""
+    data = load_usage_data()
+    
+    # 각 트래커 초기화
+    if "blog_generation" in data:
+        for ip, usage_info in data["blog_generation"].items():
+            reset_time = usage_info.get("reset_time")
+            if isinstance(reset_time, str):
+                reset_time = datetime.fromisoformat(reset_time)
+            usage_tracker[ip] = {
+                "count": usage_info.get("count", 0),
+                "reset_time": reset_time or (datetime.now() + timedelta(days=1))
+            }
+    
+    if "reference_analysis" in data:
+        for ip, usage_info in data["reference_analysis"].items():
+            reset_time = usage_info.get("reset_time")
+            if isinstance(reset_time, str):
+                reset_time = datetime.fromisoformat(reset_time)
+            reference_analysis_tracker[ip] = {
+                "count": usage_info.get("count", 0),
+                "reset_time": reset_time or (datetime.now() + timedelta(days=1))
+            }
+    
+    if "blog_ideas" in data:
+        for ip, usage_info in data["blog_ideas"].items():
+            reset_time = usage_info.get("reset_time")
+            if isinstance(reset_time, str):
+                reset_time = datetime.fromisoformat(reset_time)
+            blog_ideas_tracker[ip] = {
+                "count": usage_info.get("count", 0),
+                "reset_time": reset_time or (datetime.now() + timedelta(days=1))
+            }
+    
+    logger.info(f"[USAGE_DATA] 사용량 데이터 로드 완료: 블로그 생성={len(usage_tracker)}, 상위 분석={len(reference_analysis_tracker)}, 아이디어={len(blog_ideas_tracker)}")
+
+def record_first_seen(ip: str):
+    """IP의 첫 접속 시간을 기록합니다."""
+    data = load_usage_data()
+    if "first_seen" not in data:
+        data["first_seen"] = {}
+    
+    if ip not in data["first_seen"]:
+        data["first_seen"][ip] = datetime.now().isoformat()
+        # JSON 파일에 저장
+        try:
+            with open(USAGE_DATA_FILE, 'r', encoding='utf-8') as f:
+                full_data = json.load(f)
+            full_data["first_seen"] = data["first_seen"]
+            with open(USAGE_DATA_FILE, 'w', encoding='utf-8') as f:
+                json.dump(full_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"[USAGE_DATA] 첫 접속 시간 기록 오류: {e}")
+
+# 서버 시작 시 사용량 데이터 로드
+initialize_usage_trackers()
+
+# ===== 비동기 작업 큐 시스템 =====
+class TaskStatus(str, Enum):
+    """작업 상태"""
+    PENDING = "pending"  # 대기 중
+    RUNNING = "running"   # 실행 중
+    COMPLETED = "completed"  # 완료
+    FAILED = "failed"    # 실패
+
+# 작업 상태 추적 (메모리 기반)
+# 구조: {task_id: {"status": TaskStatus, "progress": int, "result": Any, "error": str, "created_at": datetime, "ip": str}}
+task_status_tracker: Dict[str, Dict[str, Any]] = {}
+
+# 작업 큐 (IP별로 최대 동시 실행 작업 수 제한)
+# 구조: {ip: [task_id1, task_id2, ...]}
+task_queues: Dict[str, List[str]] = defaultdict(list)
+
+# IP별 최대 동시 실행 작업 수 (기본 1개)
+MAX_CONCURRENT_TASKS_PER_IP = int(os.getenv("MAX_CONCURRENT_TASKS_PER_IP", "1"))
+
+def create_task_id() -> str:
+    """고유한 작업 ID를 생성합니다."""
+    return str(uuid.uuid4())
+
+def get_task_status(task_id: str) -> Optional[Dict[str, Any]]:
+    """작업 상태를 조회합니다."""
+    return task_status_tracker.get(task_id)
+
+def update_task_status(task_id: str, status: TaskStatus, progress: int = 0, result: Any = None, error: str = None):
+    """작업 상태를 업데이트합니다."""
+    if task_id not in task_status_tracker:
+        return
+    
+    task_status_tracker[task_id].update({
+        "status": status.value,
+        "progress": progress,
+        "result": result,
+        "error": error,
+        "updated_at": datetime.now().isoformat()
+    })
+
+def can_start_task(ip: str) -> bool:
+    """해당 IP가 새로운 작업을 시작할 수 있는지 확인합니다."""
+    running_tasks = [
+        task_id for task_id, task_info in task_status_tracker.items()
+        if task_info.get("ip") == ip and task_info.get("status") == TaskStatus.RUNNING.value
+    ]
+    return len(running_tasks) < MAX_CONCURRENT_TASKS_PER_IP
+
+async def run_task_async(task_id: str, task_func, *args, **kwargs):
+    """작업을 비동기로 실행합니다."""
+    try:
+        update_task_status(task_id, TaskStatus.RUNNING, progress=10)
+        
+        # 동기 함수를 비동기로 실행
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, task_func, *args, **kwargs)
+        
+        update_task_status(task_id, TaskStatus.COMPLETED, progress=100, result=result)
+        logger.info(f"[TASK] 작업 완료: task_id={task_id}")
+        
+    except Exception as e:
+        logger.exception(f"[TASK] 작업 실패: task_id={task_id}, error={e}")
+        update_task_status(task_id, TaskStatus.FAILED, progress=0, error=str(e))
+    finally:
+        # 작업 큐에서 제거
+        task_info = task_status_tracker.get(task_id)
+        if task_info:
+            ip = task_info.get("ip")
+            if ip and task_id in task_queues[ip]:
+                task_queues[ip].remove(task_id)
+
+# 작업 상태 조회 API 모델
+class TaskStatusResponse(BaseModel):
+    """작업 상태 응답 모델"""
+    task_id: str
+    status: str
+    progress: int
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    created_at: str
+    updated_at: Optional[str] = None
+
+@app.get("/api/task/{task_id}", response_model=TaskStatusResponse)
+async def get_task_status(task_id: str, http_request: Request):
+    """
+    작업 상태를 조회합니다.
+    """
+    try:
+        task_info = get_task_status(task_id)
+        if not task_info:
+            raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다.")
+        
+        # IP 확인 (본인의 작업만 조회 가능, Admin은 모든 작업 조회 가능)
+        client_ip = get_client_ip(http_request)
+        task_ip = task_info.get("ip")
+        if not is_admin_ip(client_ip) and task_ip != client_ip:
+            raise HTTPException(status_code=403, detail="다른 사용자의 작업은 조회할 수 없습니다.")
+        
+        return TaskStatusResponse(
+            task_id=task_id,
+            status=task_info.get("status", "unknown"),
+            progress=task_info.get("progress", 0),
+            result=task_info.get("result"),
+            error=task_info.get("error"),
+            created_at=task_info.get("created_at", ""),
+            updated_at=task_info.get("updated_at")
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"[TASK] 작업 상태 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail=f"작업 상태 조회 중 오류 발생: {str(e)}")
+
+def get_client_ip(request: Request) -> str:
+    """클라이언트 IP 주소를 가져옵니다."""
+    # X-Forwarded-For 헤더 확인 (프록시/로드밸런서 뒤에 있을 경우)
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        # 첫 번째 IP가 실제 클라이언트 IP
+        return forwarded_for.split(",")[0].strip()
+    
+    # X-Real-IP 헤더 확인
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip.strip()
+    
+    # 직접 연결인 경우
+    if request.client:
+        return request.client.host
+    
+    return "unknown"
+
+def is_admin_ip(ip: str) -> bool:
+    """IP가 admin IP 목록에 있는지 확인합니다."""
+    if not ADMIN_IPS:
+        return False
+    return ip in ADMIN_IPS
+
+def check_usage_limit(ip: str, limit: int = DAILY_LIMIT) -> tuple[bool, str]:
+    """
+    사용량 제한을 확인합니다.
+    
+    Returns:
+        (is_allowed, message): 허용 여부와 메시지
+    """
+    # Admin IP는 무제한 사용 가능
+    if is_admin_ip(ip):
+        logger.info(f"[USAGE] Admin IP {ip} - 무제한 사용 허용")
+        return True, "admin"
+    
+    # 첫 접속 시간 기록
+    record_first_seen(ip)
+    
+    now = datetime.now()
+    usage = usage_tracker[ip]
+    
+    # 리셋 시간이 지났으면 카운트 초기화
+    if now > usage["reset_time"]:
+        usage["count"] = 0
+        usage["reset_time"] = now + timedelta(days=1)
+        logger.info(f"[USAGE] IP {ip} - 일일 사용량 리셋")
+    
+    # 사용량 확인
+    if usage["count"] >= limit:
+        remaining_time = usage["reset_time"] - now
+        hours = int(remaining_time.total_seconds() / 3600)
+        minutes = int((remaining_time.total_seconds() % 3600) / 60)
+        message = f"일일 사용량 제한({limit}회)에 도달했습니다. 다음 리셋까지 약 {hours}시간 {minutes}분 남았습니다."
+        logger.warning(f"[USAGE] IP {ip} - 사용량 제한 도달 ({usage['count']}/{limit})")
+        save_usage_data()  # 변경사항 저장
+        return False, message
+    
+    # 사용량 증가
+    usage["count"] += 1
+    remaining = limit - usage["count"]
+    logger.info(f"[USAGE] IP {ip} - 사용량: {usage['count']}/{limit} (남은 횟수: {remaining})")
+    save_usage_data()  # 변경사항 저장
+    return True, f"사용량: {usage['count']}/{limit} (남은 횟수: {remaining})"
+
+def get_usage_info(ip: str) -> Dict[str, Any]:
+    """
+    현재 IP의 사용량 정보를 반환합니다.
+    
+    Returns:
+        사용량 정보 딕셔너리
+    """
+    is_admin = is_admin_ip(ip)
+    now = datetime.now()
+    
+    # 블로그 생성 사용량
+    usage = usage_tracker[ip]
+    if now > usage["reset_time"]:
+        usage["count"] = 0
+        usage["reset_time"] = now + timedelta(days=1)
+    
+    # 상위 블로그 분석 사용량
+    ref_usage = reference_analysis_tracker[ip]
+    if now > ref_usage["reset_time"]:
+        ref_usage["count"] = 0
+        ref_usage["reset_time"] = now + timedelta(days=1)
+    
+    # 블로그 아이디어 생성 사용량
+    ideas_usage = blog_ideas_tracker[ip]
+    if now > ideas_usage["reset_time"]:
+        ideas_usage["count"] = 0
+        ideas_usage["reset_time"] = now + timedelta(days=1)
+    
+    # 리셋까지 남은 시간 계산
+    remaining_time = usage["reset_time"] - now
+    ref_remaining_time = ref_usage["reset_time"] - now
+    ideas_remaining_time = ideas_usage["reset_time"] - now
+    
+    return {
+        "is_admin": is_admin,
+        "blog_generation": {
+            "used": usage["count"],
+            "limit": DAILY_LIMIT if not is_admin else -1,  # -1은 무제한
+            "remaining": DAILY_LIMIT - usage["count"] if not is_admin else -1,
+            "reset_in_hours": int(remaining_time.total_seconds() / 3600) if not is_admin else 0,
+            "reset_in_minutes": int((remaining_time.total_seconds() % 3600) / 60) if not is_admin else 0
+        },
+        "reference_analysis": {
+            "used": ref_usage["count"],
+            "limit": REFERENCE_ANALYSIS_LIMIT if not is_admin else -1,
+            "remaining": REFERENCE_ANALYSIS_LIMIT - ref_usage["count"] if not is_admin else -1,
+            "reset_in_hours": int(ref_remaining_time.total_seconds() / 3600) if not is_admin else 0,
+            "reset_in_minutes": int((ref_remaining_time.total_seconds() % 3600) / 60) if not is_admin else 0
+        },
+        "blog_ideas": {
+            "used": ideas_usage["count"],
+            "limit": BLOG_IDEAS_LIMIT if not is_admin else -1,
+            "remaining": BLOG_IDEAS_LIMIT - ideas_usage["count"] if not is_admin else -1,
+            "reset_in_hours": int(ideas_remaining_time.total_seconds() / 3600) if not is_admin else 0,
+            "reset_in_minutes": int((ideas_remaining_time.total_seconds() % 3600) / 60) if not is_admin else 0
+        }
+    }
+
+def check_reference_analysis_limit(ip: str, limit: int = REFERENCE_ANALYSIS_LIMIT) -> tuple[bool, str]:
+    """
+    상위 블로그 분석 사용량 제한을 확인합니다.
+    
+    Returns:
+        (is_allowed, message): 허용 여부와 메시지
+    """
+    # Admin IP는 무제한 사용 가능
+    if is_admin_ip(ip):
+        logger.info(f"[REFERENCE] Admin IP {ip} - 무제한 사용 허용")
+        return True, "admin"
+    
+    # 첫 접속 시간 기록
+    record_first_seen(ip)
+    
+    now = datetime.now()
+    usage = reference_analysis_tracker[ip]
+    
+    # 리셋 시간이 지났으면 카운트 초기화
+    if now > usage["reset_time"]:
+        usage["count"] = 0
+        usage["reset_time"] = now + timedelta(days=1)
+        logger.info(f"[REFERENCE] IP {ip} - 일일 사용량 리셋")
+    
+    # 사용량 확인
+    if usage["count"] >= limit:
+        remaining_time = usage["reset_time"] - now
+        hours = int(remaining_time.total_seconds() / 3600)
+        minutes = int((remaining_time.total_seconds() % 3600) / 60)
+        message = f"상위 블로그 분석 일일 사용량 제한({limit}회)에 도달했습니다. 다음 리셋까지 약 {hours}시간 {minutes}분 남았습니다."
+        logger.warning(f"[REFERENCE] IP {ip} - 사용량 제한 도달 ({usage['count']}/{limit})")
+        save_usage_data()  # 변경사항 저장
+        return False, message
+    
+    # 사용량 증가
+    usage["count"] += 1
+    remaining = limit - usage["count"]
+    logger.info(f"[REFERENCE] IP {ip} - 상위 블로그 분석 사용량: {usage['count']}/{limit} (남은 횟수: {remaining})")
+    save_usage_data()  # 변경사항 저장
+    return True, f"상위 블로그 분석 사용량: {usage['count']}/{limit} (남은 횟수: {remaining})"
+
+
+def check_blog_ideas_limit(ip: str, limit: int = BLOG_IDEAS_LIMIT) -> tuple[bool, str]:
+    """
+    블로그 아이디어 생성 사용량 제한을 확인합니다.
+    
+    Returns:
+        (is_allowed, message): 허용 여부와 메시지
+    """
+    # Admin IP는 무제한 사용 가능
+    if is_admin_ip(ip):
+        logger.info(f"[BLOG_IDEAS] Admin IP {ip} - 무제한 사용 허용")
+        return True, "admin"
+    
+    # 첫 접속 시간 기록
+    record_first_seen(ip)
+    
+    now = datetime.now()
+    usage = blog_ideas_tracker[ip]
+    
+    # 리셋 시간이 지났으면 카운트 초기화
+    if now > usage["reset_time"]:
+        usage["count"] = 0
+        usage["reset_time"] = now + timedelta(days=1)
+        logger.info(f"[BLOG_IDEAS] IP {ip} - 일일 사용량 리셋")
+    
+    # 사용량 확인
+    if usage["count"] >= limit:
+        remaining_time = usage["reset_time"] - now
+        hours = int(remaining_time.total_seconds() / 3600)
+        minutes = int((remaining_time.total_seconds() % 3600) / 60)
+        message = f"블로그 아이디어 생성 일일 사용량 제한({limit}회)에 도달했습니다. 다음 리셋까지 약 {hours}시간 {minutes}분 남았습니다."
+        logger.warning(f"[BLOG_IDEAS] IP {ip} - 사용량 제한 도달 ({usage['count']}/{limit})")
+        save_usage_data()  # 변경사항 저장
+        return False, message
+    
+    # 사용량 증가
+    usage["count"] += 1
+    remaining = limit - usage["count"]
+    logger.info(f"[BLOG_IDEAS] IP {ip} - 블로그 아이디어 생성 사용량: {usage['count']}/{limit} (남은 횟수: {remaining})")
+    save_usage_data()  # 변경사항 저장
+    return True, f"블로그 아이디어 생성 사용량: {usage['count']}/{limit} (남은 횟수: {remaining})"
+
+# blog/create_naver 디렉토리 설정 (GPT 자동 생성용)
 CREATE_NAVER_DIR = DATA_DIR / "blog" / "create_naver"
 CREATE_NAVER_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -73,6 +570,14 @@ EXPORT_BLOG_DIR.mkdir(parents=True, exist_ok=True)
 CREATE_BLOG_PROMPT_DIR = DATA_DIR / "blog" / "create_blog_prompt"
 CREATE_BLOG_PROMPT_DIR.mkdir(parents=True, exist_ok=True)
 
+# 임시 저장 디렉토리 설정 (IP 기반)
+DRAFT_DIR = DATA_DIR / "blog" / "drafts"
+DRAFT_DIR.mkdir(parents=True, exist_ok=True)
+
+# blog/image_downloads 디렉토리 설정 (이미지 ZIP 다운로드용)
+IMAGE_DOWNLOADS_DIR = DATA_DIR / "blog" / "image_downloads"
+IMAGE_DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
 # 정적 파일 서빙 (naver_crawler 디렉토리 전체)
 app.mount("/static/naver_crawler", StaticFiles(directory=str(NAVER_CRAWLER_DIR)), name="static_naver_crawler")
 
@@ -81,6 +586,9 @@ app.mount("/static/blog/create_naver", StaticFiles(directory=str(CREATE_NAVER_DI
 
 # 정적 파일 서빙 (blog/export_blog 디렉토리 전체)
 app.mount("/static/blog/export_blog", StaticFiles(directory=str(EXPORT_BLOG_DIR)), name="static_export_blog")
+
+# 정적 파일 서빙 (blog/image_downloads 디렉토리 전체)
+app.mount("/static/blog/image_downloads", StaticFiles(directory=str(IMAGE_DOWNLOADS_DIR)), name="static_image_downloads")
 
 # 정적 파일 서빙 (blog/create_blog_prompt 디렉토리 전체)
 app.mount(
@@ -271,6 +779,18 @@ class ExportBlogRequest(BaseModel):
 
 
 class ExportBlogResponse(BaseModel):
+    success: bool
+    zip_path: Optional[str] = None
+    error: Optional[str] = None
+
+
+class DownloadImagesRequest(BaseModel):
+    """이미지 다운로드 요청 모델"""
+    image_paths: List[str] = Field(..., description="다운로드할 이미지 경로 리스트 (상대 경로)")
+
+
+class DownloadImagesResponse(BaseModel):
+    """이미지 다운로드 응답 모델"""
     success: bool
     zip_path: Optional[str] = None
     error: Optional[str] = None
@@ -659,6 +1179,223 @@ async def health_check():
     return {"status": "healthy"}
 
 
+@app.get("/api/usage")
+async def get_usage(http_request: Request):
+    """
+    현재 IP의 사용량 정보를 반환합니다.
+    """
+    try:
+        client_ip = get_client_ip(http_request)
+        usage_info = get_usage_info(client_ip)
+        return usage_info
+    except Exception as e:
+        logger.exception(f"[USAGE] 사용량 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail=f"사용량 조회 중 오류 발생: {str(e)}")
+
+
+# ===== 임시 저장 API (IP 기반) =====
+class SaveDraftRequest(BaseModel):
+    """임시 저장 요청 모델"""
+    title: Optional[Dict[str, Any]] = Field(None, description="제목 (Quill Delta 형식)")
+    body: Optional[Dict[str, Any]] = Field(None, description="본문 (Quill Delta 형식)")
+    tags: Optional[Dict[str, Any]] = Field(None, description="태그 (Quill Delta 형식)")
+    image_meta: Optional[Dict[str, Any]] = Field(None, description="이미지 메타데이터")
+
+
+class SaveDraftResponse(BaseModel):
+    """임시 저장 응답 모델"""
+    success: bool
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+
+class GetDraftResponse(BaseModel):
+    """임시 저장 불러오기 응답 모델"""
+    success: bool
+    title: Optional[Dict[str, Any]] = None
+    body: Optional[Dict[str, Any]] = None
+    tags: Optional[Dict[str, Any]] = None
+    image_meta: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+
+def get_draft_file_path(ip: str) -> Path:
+    """IP별 임시 저장 파일 경로를 반환합니다."""
+    # IP 주소를 파일명으로 사용 (특수문자 제거)
+    safe_ip = ip.replace(".", "_").replace(":", "_")
+    return DRAFT_DIR / f"draft_{safe_ip}.json"
+
+
+@app.post("/api/save-draft", response_model=SaveDraftResponse)
+async def save_draft(request: SaveDraftRequest, http_request: Request):
+    """
+    에디터 내용을 IP 기반으로 임시 저장합니다.
+    """
+    try:
+        client_ip = get_client_ip(http_request)
+        draft_path = get_draft_file_path(client_ip)
+        
+        draft_data = {
+            "ip": client_ip,
+            "saved_at": datetime.now().isoformat(),
+            "title": request.title,
+            "body": request.body,
+            "tags": request.tags,
+            "image_meta": request.image_meta
+        }
+        
+        # JSON 파일로 저장
+        with open(draft_path, 'w', encoding='utf-8') as f:
+            json.dump(draft_data, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"[DRAFT] 임시 저장 완료: IP={client_ip}")
+        return SaveDraftResponse(success=True, message="임시 저장 완료")
+        
+    except Exception as e:
+        logger.exception(f"[DRAFT] 임시 저장 오류: {e}")
+        return SaveDraftResponse(
+            success=False,
+            error=f"임시 저장 중 오류 발생: {str(e)}"
+        )
+
+
+@app.get("/api/get-draft", response_model=GetDraftResponse)
+async def get_draft(http_request: Request):
+    """
+    현재 IP의 임시 저장된 내용을 불러옵니다.
+    """
+    try:
+        client_ip = get_client_ip(http_request)
+        draft_path = get_draft_file_path(client_ip)
+        
+        if not draft_path.exists():
+            return GetDraftResponse(success=True)  # 저장된 내용 없음
+        
+        # JSON 파일 읽기
+        with open(draft_path, 'r', encoding='utf-8') as f:
+            draft_data = json.load(f)
+        
+        logger.info(f"[DRAFT] 임시 저장 불러오기 완료: IP={client_ip}")
+        return GetDraftResponse(
+            success=True,
+            title=draft_data.get("title"),
+            body=draft_data.get("body"),
+            tags=draft_data.get("tags"),
+            image_meta=draft_data.get("image_meta")
+        )
+        
+    except Exception as e:
+        logger.exception(f"[DRAFT] 임시 저장 불러오기 오류: {e}")
+        return GetDraftResponse(
+            success=False,
+            error=f"임시 저장 불러오기 중 오류 발생: {str(e)}"
+        )
+
+
+@app.delete("/api/delete-draft")
+async def delete_draft(http_request: Request):
+    """
+    현재 IP의 임시 저장된 내용을 삭제합니다.
+    """
+    try:
+        client_ip = get_client_ip(http_request)
+        draft_path = get_draft_file_path(client_ip)
+        
+        if draft_path.exists():
+            draft_path.unlink()
+            logger.info(f"[DRAFT] 임시 저장 삭제 완료: IP={client_ip}")
+        
+        return {"success": True, "message": "임시 저장 삭제 완료"}
+        
+    except Exception as e:
+        logger.exception(f"[DRAFT] 임시 저장 삭제 오류: {e}")
+        raise HTTPException(status_code=500, detail=f"임시 저장 삭제 중 오류 발생: {str(e)}")
+
+
+# ===== 관리자용 사용량 조회 API =====
+class UsageStatsResponse(BaseModel):
+    """전체 사용량 통계 응답 모델"""
+    total_users: int
+    users: List[Dict[str, Any]]
+
+
+@app.get("/api/admin/usage-stats", response_model=UsageStatsResponse)
+async def get_usage_stats(http_request: Request):
+    """
+    관리자용: 전체 접속자 수와 각 IP별 사용량을 조회합니다.
+    Admin IP만 접근 가능합니다.
+    """
+    try:
+        client_ip = get_client_ip(http_request)
+        
+        # Admin IP 확인
+        if not is_admin_ip(client_ip):
+            raise HTTPException(status_code=403, detail="관리자만 접근 가능합니다.")
+        
+        # 모든 IP 수집 (세 가지 트래커에서)
+        all_ips = set()
+        all_ips.update(usage_tracker.keys())
+        all_ips.update(reference_analysis_tracker.keys())
+        all_ips.update(blog_ideas_tracker.keys())
+        
+        # first_seen 데이터 로드
+        data = load_usage_data()
+        first_seen_data = data.get("first_seen", {})
+        
+        # 각 IP별 사용량 정보 수집
+        users = []
+        for ip in all_ips:
+            # 각 트래커에서 사용량 가져오기
+            blog_gen = usage_tracker.get(ip, {"count": 0, "reset_time": datetime.now() + timedelta(days=1)})
+            ref_analysis = reference_analysis_tracker.get(ip, {"count": 0, "reset_time": datetime.now() + timedelta(days=1)})
+            blog_ideas = blog_ideas_tracker.get(ip, {"count": 0, "reset_time": datetime.now() + timedelta(days=1)})
+            
+            # 리셋 시간 계산
+            now = datetime.now()
+            blog_reset = blog_gen["reset_time"] - now if blog_gen["reset_time"] > now else timedelta(0)
+            ref_reset = ref_analysis["reset_time"] - now if ref_analysis["reset_time"] > now else timedelta(0)
+            ideas_reset = blog_ideas["reset_time"] - now if blog_ideas["reset_time"] > now else timedelta(0)
+            
+            user_info = {
+                "ip": ip,
+                "is_admin": is_admin_ip(ip),
+                "first_seen": first_seen_data.get(ip, None),
+                "blog_generation": {
+                    "used": blog_gen["count"],
+                    "limit": DAILY_LIMIT if not is_admin_ip(ip) else -1,
+                    "reset_in_hours": int(blog_reset.total_seconds() / 3600) if blog_reset.total_seconds() > 0 else 0,
+                    "reset_in_minutes": int((blog_reset.total_seconds() % 3600) / 60) if blog_reset.total_seconds() > 0 else 0
+                },
+                "reference_analysis": {
+                    "used": ref_analysis["count"],
+                    "limit": REFERENCE_ANALYSIS_LIMIT if not is_admin_ip(ip) else -1,
+                    "reset_in_hours": int(ref_reset.total_seconds() / 3600) if ref_reset.total_seconds() > 0 else 0,
+                    "reset_in_minutes": int((ref_reset.total_seconds() % 3600) / 60) if ref_reset.total_seconds() > 0 else 0
+                },
+                "blog_ideas": {
+                    "used": blog_ideas["count"],
+                    "limit": BLOG_IDEAS_LIMIT if not is_admin_ip(ip) else -1,
+                    "reset_in_hours": int(ideas_reset.total_seconds() / 3600) if ideas_reset.total_seconds() > 0 else 0,
+                    "reset_in_minutes": int((ideas_reset.total_seconds() % 3600) / 60) if ideas_reset.total_seconds() > 0 else 0
+                }
+            }
+            users.append(user_info)
+        
+        # IP별로 정렬 (첫 접속 시간 기준, 최신순)
+        users.sort(key=lambda x: x.get("first_seen") or "", reverse=True)
+        
+        return UsageStatsResponse(
+            total_users=len(users),
+            users=users
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"[ADMIN] 사용량 통계 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail=f"사용량 통계 조회 중 오류 발생: {str(e)}")
+
+
 @app.post("/api/search", response_model=SearchResponse)
 async def search_blogs(request: SearchRequest):
     """
@@ -865,7 +1602,7 @@ async def analyze_keywords(request: AnalyzeRequest):
 
 
 @app.post("/api/process", response_model=ProcessResponse)
-async def process_blogs(request: ProcessRequest):
+async def process_blogs(request: ProcessRequest, http_request: Request):
     """
     전체 처리 (검색 + 크롤링 + 분석)
     
@@ -877,56 +1614,82 @@ async def process_blogs(request: ProcessRequest):
     - **min_count**: 최소 출현 횟수
     """
     try:
+        # 사용량 제한 확인 (상위 블로그 분석)
+        client_ip = get_client_ip(http_request)
+        is_allowed, message = check_reference_analysis_limit(client_ip)
+        if not is_allowed:
+            return ProcessResponse(
+                success=False,
+                total_count=0,
+                success_count=0,
+                results=[],
+                error=message
+            )
         logger.info(
             f"[PROCESS] keyword={request.keyword!r}, n={request.n}, "
             f"analyze={request.analyze}, top_n={request.top_n}, "
             f"min_length={request.min_length}, min_count={request.min_count}"
         )
-        # 1. 블로그 검색
+        # 1. 블로그 검색 (비동기 처리)
+        loop = asyncio.get_event_loop()
         crawler = NaverCrawler()
-        blog_list = crawler.get_top_n_blog_info(request.keyword, n=request.n)
+        blog_list = await loop.run_in_executor(
+            None,
+            crawler.get_top_n_blog_info,
+            request.keyword,
+            request.n
+        )
         
         if not blog_list or len(blog_list) == 0:
             raise HTTPException(status_code=404, detail="블로그 글을 찾을 수 없습니다.")
         
         logger.info(f"[PROCESS] search found {len(blog_list)} blogs")
-        # 2. 출력 디렉토리 생성 (요청한 개수만큼만)
+        # 2. 출력 디렉토리 생성 (요청한 개수만큼만) - 동기 처리 (순서 보장 필요)
         output_dir = get_output_directory(count=request.n)
         
-        # 3. 병렬 처리
+        # 3. 병렬 처리 (비동기로 실행하여 다른 요청을 블로킹하지 않음)
         results = []
+        loop = asyncio.get_event_loop()
         with ThreadPoolExecutor(max_workers=min(request.n, 3)) as executor:
-            futures = []
-            for i, blog_info in enumerate(blog_list, 1):
+            # 각 블로그 처리를 비동기로 실행
+            async def process_single_blog_async(blog_info, rank):
                 crawler_instance = NaverCrawler()
-                future = executor.submit(
+                return await loop.run_in_executor(
+                    executor,
                     process_single_blog,
                     crawler_instance,
                     blog_info,
-                    i,
+                    rank,
                     output_dir,
                     request.analyze,
                     request.top_n,
                     request.min_length,
                     request.min_count
                 )
-                futures.append((i, future))
             
-            for rank, future in futures:
-                try:
-                    result = future.result()
-                    results.append(result)
-                except Exception as e:
-                    logger.exception(f"[PROCESS] error processing rank={rank}: {e}")
+            # 모든 블로그를 동시에 처리
+            tasks = [
+                process_single_blog_async(blog_info, i)
+                for i, blog_info in enumerate(blog_list, 1)
+            ]
+            
+            # 결과 수집
+            processed_results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            for rank, result in enumerate(processed_results, 1):
+                if isinstance(result, Exception):
+                    logger.exception(f"[PROCESS] error processing rank={rank}: {result}")
                     results.append(ProcessResult(
                         rank=rank,
                         title=blog_list[rank-1]['title'] if rank <= len(blog_list) else "알 수 없음",
                         url=blog_list[rank-1]['url'] if rank <= len(blog_list) else "",
                         success=False,
-                        error=str(e)
+                        error=str(result)
                     ))
+                else:
+                    results.append(result)
         
-        # 결과 정렬
+        # 결과 정렬 (동기 처리 - 순서 보장 필요)
         results.sort(key=lambda x: x.rank)
         
         success_count = sum(1 for r in results if r.success)
@@ -1133,7 +1896,7 @@ async def get_default_ban_words():
 
 
 @app.post("/api/generate-blog", response_model=GenerateBlogResponse)
-async def generate_blog(request: GenerateBlogRequest):
+async def generate_blog(request: GenerateBlogRequest, http_request: Request):
     """
     GPT API를 사용하여 블로그 글을 생성합니다.
     
@@ -1148,7 +1911,18 @@ async def generate_blog(request: GenerateBlogRequest):
     - **save_json**: JSON 파일로 저장 여부 (기본값: True)
     """
     try:
+        # 사용량 제한 확인
+        client_ip = get_client_ip(http_request)
+        is_allowed, message = check_usage_limit(client_ip)
+        if not is_allowed:
+            return GenerateBlogResponse(
+                success=False,
+                error=message
+            )
+        
         # 1) 상위 블로그 자동 수집/사용자 지정 참고 URL 기반 analysis_json 구성
+        # AI 블로그 생성 탭에서는 상위 블로그 분석을 별도로 카운트하지 않고
+        # 블로그 생성 버튼 클릭 1회 = 1회로 계산
         analysis_json = request.analysis_json
         if analysis_json is None and (request.use_auto_reference or (request.manual_reference_urls or [])):
             logger.info(
@@ -1158,11 +1932,15 @@ async def generate_blog(request: GenerateBlogRequest):
                 f"reference_count={request.reference_count}, "
                 f"manual_refs={len(request.manual_reference_urls or [])}"
             )
-            analysis_json = build_reference_analysis(
-                keyword=request.keywords,
-                use_auto_reference=request.use_auto_reference,
-                reference_count=request.reference_count,
-                manual_urls=request.manual_reference_urls or []
+            # 비동기로 실행
+            loop = asyncio.get_event_loop()
+            analysis_json = await loop.run_in_executor(
+                None,
+                build_reference_analysis,
+                request.keywords,
+                request.use_auto_reference,
+                request.reference_count,
+                request.manual_reference_urls or []
             )
 
         logger.info(
@@ -1177,16 +1955,20 @@ async def generate_blog(request: GenerateBlogRequest):
         )
 
         # 2) 블로그 글 생성 (기본 금칙어는 generate_blog_content 내부에서 자동 병합됨)
-        blog_content = generate_blog_content(
-            keywords=request.keywords,
-            category=request.category,
-            blog_level=request.blog_level,
-            ban_words=request.ban_words or [],
-            analysis_json=analysis_json,
-            model=request.model,
-            temperature=request.temperature,
-            # 신규 레벨(new)에서는 외부 링크를 사용하지 않음
-            external_links=None if request.blog_level == "new" else (request.external_links or None)
+        # 비동기로 실행하여 여러 요청을 동시에 처리 가능
+        loop = asyncio.get_event_loop()
+        blog_content = await loop.run_in_executor(
+            None,
+            generate_blog_content,
+            request.keywords,
+            request.category,
+            request.blog_level,
+            request.ban_words or [],
+            analysis_json,
+            request.model,
+            request.temperature,
+            None,  # max_tokens
+            None if request.blog_level == "new" else (request.external_links or None)  # external_links
         )
         
         # 3) 이미지 플레이스홀더 추출 및 이미지 생성 (generate_images가 True인 경우만)
@@ -1211,10 +1993,13 @@ async def generate_blog(request: GenerateBlogRequest):
                 # JSON 저장하지 않아도 이미지만 저장할 수 있도록 임시 디렉토리 생성
                 output_dir = get_create_naver_directory()
             
-            # 각 이미지 플레이스홀더에 대해 이미지 생성
+            # 각 이미지 플레이스홀더에 대해 이미지 생성 (병렬 처리)
             generated_images = []
             image_retry_count = 0
-            for img_placeholder in image_placeholders:
+            
+            # 이미지 생성을 병렬로 처리하는 함수
+            def generate_single_image(img_placeholder):
+                nonlocal image_retry_count
                 attempts = 0
                 image_path = None
                 while attempts < 3 and image_path is None:
@@ -1229,18 +2014,16 @@ async def generate_blog(request: GenerateBlogRequest):
                         
                         if image_path:
                             # 상대 경로로 변환 (프론트엔드에서 접근 가능하도록)
-                            # output_dir는 blog/create_naver/yyyymmdd_N 형식
-                            # CREATE_NAVER_DIR 기준으로 상대 경로 계산 (날짜 디렉토리 포함)
                             relative_to_base = image_path.relative_to(CREATE_NAVER_DIR)
-                            # Windows 경로 구분자를 슬래시로 변환
                             relative_path = str(relative_to_base).replace('\\', '/')
-                            generated_images.append({
+                            result = {
                                 "index": img_placeholder["index"],
                                 "placeholder": img_placeholder["placeholder"],
                                 "image_path": relative_path,
                                 "full_path": str(image_path)
-                            })
+                            }
                             logger.info(f"[GENERATE] 이미지 생성 완료: {relative_path}")
+                            return result
                         else:
                             logger.warning(
                                 f"[GENERATE] 이미지 생성 실패: index={img_placeholder['index']}, "
@@ -1255,6 +2038,28 @@ async def generate_blog(request: GenerateBlogRequest):
                         )
                         if attempts < 3:
                             image_retry_count += 1
+                return None
+            
+            # ThreadPoolExecutor를 사용하여 병렬 처리 (최대 3개 동시 실행)
+            # 비동기로 실행하여 다른 요청을 블로킹하지 않음
+            loop = asyncio.get_event_loop()
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                # 모든 이미지 생성을 비동기로 실행
+                futures = [
+                    loop.run_in_executor(executor, generate_single_image, img_placeholder)
+                    for img_placeholder in image_placeholders
+                ]
+                
+                # 결과 수집 (인덱스 순서대로 정렬)
+                results = await asyncio.gather(*futures, return_exceptions=True)
+                for result in results:
+                    if isinstance(result, Exception):
+                        logger.error(f"[GENERATE] 이미지 생성 중 예외 발생: {result}")
+                    elif result:
+                        generated_images.append(result)
+            
+            # 인덱스 순서대로 정렬
+            generated_images.sort(key=lambda x: x["index"])
             
             # 생성된 이미지 정보를 blog_content에 추가
             if generated_images:
@@ -1265,6 +2070,11 @@ async def generate_blog(request: GenerateBlogRequest):
         if analysis_json:
             blog_content["analysis"] = analysis_json
             logger.info(f"[GENERATE] 분석 정보 추가: top_keywords={len(analysis_json.get('top_keywords', []))}개")
+        
+        # 외부 링크 정보를 blog_content에 추가 (프론트엔드에서 에디터 하단에 배치하기 위해)
+        if request.external_links and request.blog_level != "new":
+            blog_content["external_links"] = request.external_links
+            logger.info(f"[GENERATE] 외부 링크 정보 추가: {len(request.external_links)}개")
         
         # JSON 파일로 저장
         json_path = None
@@ -1460,8 +2270,108 @@ async def export_blog(request: ExportBlogRequest):
         )
 
 
+@app.post("/api/download-images", response_model=DownloadImagesResponse)
+async def download_images(request: DownloadImagesRequest):
+    """
+    생성된 이미지들을 ZIP 파일로 압축하여 다운로드 경로를 반환합니다.
+    
+    - **image_paths**: 다운로드할 이미지 경로 리스트 (예: ["images/이미지삽입1.jpg", ...])
+    """
+    try:
+        if not request.image_paths:
+            return DownloadImagesResponse(
+                success=False,
+                error="이미지 경로가 제공되지 않았습니다."
+            )
+        
+        # ZIP 파일 생성 디렉토리
+        temp_zip_dir = IMAGE_DOWNLOADS_DIR
+        
+        # ZIP 파일명 생성
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        zip_filename = f"blog_images_{timestamp}.zip"
+        zip_path = temp_zip_dir / zip_filename
+        
+        # ZIP 파일 생성
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for idx, image_path in enumerate(request.image_paths, 1):
+                try:
+                    # 경로 정규화 (상대 경로 처리)
+                    full_path = None
+                    
+                    if image_path.startswith("/static/blog/create_naver/"):
+                        # /static/blog/create_naver/... 형식
+                        relative_path = image_path[len("/static/blog/create_naver/"):]
+                        full_path = CREATE_NAVER_DIR / Path(unquote(relative_path))
+                    elif image_path.startswith("/static/"):
+                        # 다른 /static/... 경로
+                        relative_path = image_path[len("/static/"):]
+                        full_path = project_dir / "static" / Path(unquote(relative_path))
+                    elif not os.path.isabs(image_path):
+                        # 상대 경로 (create_naver 기준)
+                        # images/이미지삽입1.jpg 같은 경우 직접 처리
+                        if image_path.startswith("images/"):
+                            full_path = CREATE_NAVER_DIR / Path(unquote(image_path))
+                        else:
+                            # 파일명만 있는 경우 images 폴더 추가
+                            full_path = CREATE_NAVER_DIR / "images" / Path(unquote(image_path))
+                    else:
+                        # 절대 경로
+                        full_path = Path(image_path)
+                    
+                    # 파일 존재 확인 및 디버깅
+                    if not full_path:
+                        logger.warning(f"[DOWNLOAD_IMAGES] 경로 생성 실패: {image_path}")
+                        continue
+                    
+                    if not full_path.exists():
+                        logger.warning(f"[DOWNLOAD_IMAGES] 이미지 파일을 찾을 수 없음: {full_path}, 원본 경로: {image_path}")
+                        # images 폴더 안에서 찾기 시도
+                        if "images" not in str(full_path):
+                            alt_path = CREATE_NAVER_DIR / "images" / full_path.name
+                            if alt_path.exists():
+                                full_path = alt_path
+                                logger.info(f"[DOWNLOAD_IMAGES] 대체 경로에서 찾음: {full_path}")
+                            else:
+                                continue
+                        else:
+                            continue
+                    
+                    # ZIP 내부 파일명 (원본 파일명 유지)
+                    arcname = full_path.name
+                    zf.write(full_path, arcname)
+                    logger.debug(f"[DOWNLOAD_IMAGES] 이미지 추가: {full_path.name}")
+                    
+                except Exception as e:
+                    logger.warning(f"[DOWNLOAD_IMAGES] 이미지 추가 실패: {image_path}, 오류: {e}")
+                    continue
+        
+        # 정적 파일 경로 구성
+        try:
+            relative_zip = zip_path.relative_to(temp_zip_dir)
+            zip_relative_path = str(relative_zip).replace("\\", "/")
+            zip_url_path = f"/static/blog/image_downloads/{zip_relative_path}"
+            
+        except ValueError:
+            zip_url_path = str(zip_path)
+        
+        logger.info(f"[DOWNLOAD_IMAGES] ZIP 파일 생성 완료: {zip_path}, 이미지 수: {len(request.image_paths)}")
+        
+        return DownloadImagesResponse(
+            success=True,
+            zip_path=zip_url_path
+        )
+        
+    except Exception as e:
+        logger.exception(f"[DOWNLOAD_IMAGES] 오류: {e}")
+        return DownloadImagesResponse(
+            success=False,
+            error=f"이미지 다운로드 중 오류 발생: {str(e)}"
+        )
+
+
 @app.post("/api/generate-blog-ideas", response_model=GenerateBlogIdeasResponse)
-async def generate_blog_ideas_api(request: GenerateBlogIdeasRequest):
+async def generate_blog_ideas_api(request: GenerateBlogIdeasRequest, http_request: Request):
     """
     GPT API를 사용하여 블로그 제목과 작성 프롬프트 아이디어를 여러 개 생성합니다.
 
@@ -1472,6 +2382,16 @@ async def generate_blog_ideas_api(request: GenerateBlogIdeasRequest):
     - **count**: 생성할 아이디어 개수 (1~10)
     """
     try:
+        # 사용량 제한 확인 (블로그 아이디어 생성용 별도 트래커)
+        client_ip = get_client_ip(http_request)
+        is_allowed, message = check_blog_ideas_limit(client_ip)
+        if not is_allowed:
+            return GenerateBlogIdeasResponse(
+                success=False,
+                error=message,
+                ideas=[]
+            )
+        
         keyword = request.keyword.strip()
         topic = request.topic.strip()
         blog_profile = request.blog_profile.strip()
@@ -1493,16 +2413,19 @@ async def generate_blog_ideas_api(request: GenerateBlogIdeasRequest):
             f"auto_topic={request.auto_topic}"
         )
 
-        # 1) GPT로 아이디어 생성
-        ideas_data = generate_blog_ideas(
-            keyword=keyword,
-            topic=topic,
-            blog_profile=blog_profile,
-            extra_prompt=request.extra_prompt,
-            auto_topic=request.auto_topic,
-            count=count,
-            model=request.model,
-            temperature=request.temperature,
+        # 1) GPT로 아이디어 생성 (비동기 처리)
+        loop = asyncio.get_event_loop()
+        ideas_data = await loop.run_in_executor(
+            None,
+            generate_blog_ideas,
+            keyword,
+            topic,
+            blog_profile,
+            request.extra_prompt,
+            count,
+            request.model,
+            request.temperature,
+            request.auto_topic
         )
 
         if not ideas_data:
@@ -1531,10 +2454,10 @@ async def generate_blog_ideas_api(request: GenerateBlogIdeasRequest):
 
                 file_path = output_dir / filename
                 with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(f"제목: {title}\\n\\n")
-                    f.write("작성 프롬프트:\\n")
+                    f.write(f"제목: {title}\n\n")
+                    f.write("작성 프롬프트:\n")
                     f.write(prompt_text)
-                    f.write("\\n")
+                    f.write("\n")
 
                 # 정적 서빙용 상대 경로 (/static/blog/create_blog_prompt/...)
                 try:

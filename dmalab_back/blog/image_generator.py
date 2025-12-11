@@ -12,8 +12,10 @@ from google import genai
 from PIL import Image
 import logging
 
-# .env 파일 로드
-load_dotenv()
+# .env 파일 로드 (프로젝트 루트에서)
+current_dir = Path(__file__).parent
+project_root = current_dir.parent.parent  # DMaLab 디렉토리
+load_dotenv(project_root / ".env")
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +53,7 @@ def load_image_prompt_guide() -> Dict[str, Any]:
     if _image_prompt_guide is None:
         current_dir = Path(__file__).parent
         project_dir = current_dir.parent
-        guide_path = project_dir / "data" / "config" / "image_prompt_guide.json"
+        guide_path = project_dir / "config" / "image_prompt_guide.json"
         
         try:
             with open(guide_path, 'r', encoding='utf-8') as f:

@@ -1,4 +1,78 @@
-const API_BASE_URL = 'http://localhost:8000';
+// API 서버 주소 설정
+// 로컬 개발: 'http://localhost:8000'
+// 프로덕션: 빈 문자열 (상대 경로 사용, Nginx가 /api 경로를 프록시)
+const API_BASE_URL = '';
+
+// iframe 높이 자동 조정 (부모 페이지에 높이 전달)
+function sendHeightToParent() {
+    if (window.parent !== window) {
+        // iframe 내부에서 실행 중인 경우
+        let height = Math.max(
+            document.body.scrollHeight,
+            document.body.offsetHeight,
+            document.documentElement.clientHeight,
+            document.documentElement.scrollHeight,
+            document.documentElement.offsetHeight
+        );
+        
+        // 모달이 표시되어 있을 때는 모달 높이도 포함
+        const modal = document.querySelector('.autosave-modal');
+        if (modal) {
+            const modalRect = modal.getBoundingClientRect();
+            const modalBottom = modalRect.bottom + window.scrollY;
+            // 모달이 화면 하단을 벗어나지 않도록 높이 보정
+            height = Math.max(height, modalBottom + 20); // 여유 공간 20px 추가
+        }
+        
+        // 최소 높이 보장 (너무 작으면 안됨)
+        height = Math.max(height, 600);
+        
+        // 디버깅용 로그 (개발 환경에서만)
+        if (window.location.hostname === 'localhost' || window.location.hostname.includes('127.0.0.1')) {
+            console.log('[iframe-height] 높이 전송:', height + 'px');
+        }
+        
+        // postMessage로 부모에게 높이 전달
+        try {
+            window.parent.postMessage({
+                type: 'iframe-height',
+                height: height,
+                source: 'dmalab'
+            }, '*');
+        } catch (e) {
+            console.error('[iframe-height] postMessage 실패:', e);
+        }
+    }
+}
+
+// 초기 높이 전송
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(sendHeightToParent, 100);
+    });
+} else {
+    setTimeout(sendHeightToParent, 100);
+}
+
+// 콘텐츠 변경 시 높이 재전송
+let resizeObserver;
+if (window.ResizeObserver) {
+    resizeObserver = new ResizeObserver(function() {
+        sendHeightToParent();
+    });
+    resizeObserver.observe(document.body);
+}
+
+// 주기적으로 높이 확인 (콘텐츠 동적 로드 대응)
+setInterval(sendHeightToParent, 500);
+
+// 부모 페이지에서 높이 요청을 받으면 즉시 전송
+window.addEventListener('message', function(event) {
+    // 보안: 부모 페이지에서만 메시지 수신
+    if (event.data && event.data.type === 'request-height') {
+        sendHeightToParent();
+    }
+});
 
 // 네이버 블로그 카테고리 구조
 const NAVER_CATEGORIES = {
@@ -233,30 +307,170 @@ function initCategorySelector() {
     });
 }
 
-// 페이지 로드 시 카테고리 선택기 초기화
+// 아이디어 생성 탭 UI 초기화
+function initIdeasUI() {
+    const topicInput = document.getElementById('ideas-topic');
+    const autoTopicCheckbox = document.getElementById('ideas-auto-topic');
+    
+    if (!topicInput || !autoTopicCheckbox) return;
+    
+    // 체크박스 변경 시 입력 필드 활성/비활성 처리
+    function updateTopicInputState() {
+        const isAuto = autoTopicCheckbox.checked;
+        topicInput.disabled = isAuto;
+        if (isAuto) {
+            topicInput.value = '';
+        }
+    }
+    
+    // 초기 상태 설정
+    updateTopicInputState();
+    
+    // 체크박스 변경 이벤트 리스너
+    autoTopicCheckbox.addEventListener('change', updateTopicInputState);
+}
+
+// 페이지 로드 시 카테고리 선택기 초기화 및 탭 복원
 // 스크립트가 body 끝에 있으므로 DOM이 이미 로드되어 있을 수 있음
 (function() {
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', function() {
-            initCategorySelector();
-            initExternalLinksUI();
-            initReferenceBlogsUI();
-            // 에디터 초기화 (항상 보이도록)
-            initializeQuillEditors();
-            // 임시 저장된 내용이 있으면 복원 여부를 사용자에게 물어봄
+    function initPage() {
+        // localStorage에서 저장된 탭 읽기
+        const savedTab = localStorage.getItem('activeTab') || 'generate';
+        
+        // 모든 탭 버튼과 콘텐츠 비활성화
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        
+        // 저장된 탭 활성화
+        const tabBtn = document.querySelector(`.tab-btn[data-tab="${savedTab}"]`);
+        const tabContent = document.getElementById(`${savedTab}-tab`);
+        
+        if (tabBtn && tabContent) {
+            tabBtn.classList.add('active');
+            tabContent.classList.add('active');
+        } else {
+            // 저장된 탭이 없거나 유효하지 않으면 기본값 사용
+            const defaultTabBtn = document.querySelector('.tab-btn[data-tab="generate"]');
+            const defaultTabContent = document.getElementById('generate-tab');
+            if (defaultTabBtn) defaultTabBtn.classList.add('active');
+            if (defaultTabContent) defaultTabContent.classList.add('active');
+        }
+        
+        initCategorySelector();
+        initExternalLinksUI();
+        initReferenceBlogsUI();
+        initIdeasUI();
+        // 에디터 초기화
+        initializeQuillEditors();
+        
+        // 활성화된 탭에 맞게 에디터 표시/숨김 처리
+        const activeTabBtn = document.querySelector('.tab-btn.active');
+        const activeTab = activeTabBtn ? activeTabBtn.dataset.tab : 'generate';
+        const resultDiv = document.getElementById('result');
+        if (resultDiv) {
+            if (activeTab === 'process') {
+                resultDiv.style.display = 'none';
+            } else if (activeTab === 'generate') {
+                resultDiv.style.display = 'block';
+            }
+        }
+        // 임시 저장된 내용이 있으면 복원 여부를 사용자에게 물어봄
+        // AI 블로그 생성 탭에서만 표시
+        if (activeTab === 'generate') {
+            // async 함수이므로 await 없이 호출 (백그라운드에서 실행)
             showRestoreDraftModalIfNeeded();
-        });
+        }
+    }
+    
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initPage);
     } else {
         // DOM이 이미 로드된 경우 즉시 실행
-        setTimeout(function() {
-            initCategorySelector();
-            initExternalLinksUI();
-            initReferenceBlogsUI();
-            // 에디터 초기화 (항상 보이도록)
-            initializeQuillEditors();
-            // 임시 저장된 내용이 있으면 복원 여부를 사용자에게 물어봄
-            showRestoreDraftModalIfNeeded();
-        }, 100); // 약간의 지연으로 DOM이 완전히 준비되도록
+        setTimeout(initPage, 100); // 약간의 지연으로 DOM이 완전히 준비되도록
+    }
+})();
+
+// 사용량 정보 조회 및 업데이트
+async function updateUsageInfo() {
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/usage`);
+        if (!response.ok) {
+            throw new Error('사용량 조회 실패');
+        }
+        const usage = await response.json();
+        
+        // 상위 블로그 분석 탭
+        const processUsageText = document.getElementById('process-usage-text');
+        if (processUsageText) {
+            if (usage.is_admin) {
+                processUsageText.textContent = '🔓 Admin: 무제한 사용 가능';
+                processUsageText.style.color = '#28a745';
+            } else {
+                const ref = usage.reference_analysis;
+                const remaining = ref.remaining;
+                const color = remaining === 0 ? '#dc3545' : remaining <= 1 ? '#ff9800' : '#666';
+                processUsageText.textContent = `상위 블로그 분석: ${ref.used}/${ref.limit}회 사용 (남은 횟수: ${remaining}회)`;
+                processUsageText.style.color = color;
+            }
+        }
+        
+        // AI 블로그 생성 탭 (버튼 클릭 1회 = 1회로 계산)
+        const generateUsageText = document.getElementById('generate-usage-text');
+        if (generateUsageText) {
+            if (usage.is_admin) {
+                generateUsageText.innerHTML = '🔓 Admin: 무제한 사용 가능';
+                generateUsageText.style.color = '#28a745';
+            } else {
+                const blog = usage.blog_generation;
+                const blogRemaining = blog.remaining;
+                const blogColor = blogRemaining === 0 ? '#dc3545' : blogRemaining <= 1 ? '#ff9800' : '#666';
+                
+                generateUsageText.innerHTML = `
+                    블로그 생성: <span style="color: ${blogColor}">${blog.used}/${blog.limit}회</span> (남은 횟수: ${blogRemaining}회)
+                `;
+            }
+        }
+        
+        // AI 블로그 아이디어 생성 탭
+        const ideasUsageText = document.getElementById('ideas-usage-text');
+        if (ideasUsageText) {
+            if (usage.is_admin) {
+                ideasUsageText.textContent = '🔓 Admin: 무제한 사용 가능';
+                ideasUsageText.style.color = '#28a745';
+            } else {
+                const ideas = usage.blog_ideas || usage.blog_generation; // 하위 호환성
+                const remaining = ideas.remaining;
+                const color = remaining === 0 ? '#dc3545' : remaining <= 1 ? '#ff9800' : '#666';
+                ideasUsageText.textContent = `블로그 아이디어 생성: ${ideas.used}/${ideas.limit}회 사용 (남은 횟수: ${remaining}회)`;
+                ideasUsageText.style.color = color;
+            }
+        }
+    } catch (error) {
+        console.error('사용량 조회 오류:', error);
+        // 오류 시 기본 메시지 표시
+        const usageTexts = ['process-usage-text', 'generate-usage-text', 'ideas-usage-text'];
+        usageTexts.forEach(id => {
+            const elem = document.getElementById(id);
+            if (elem) {
+                elem.textContent = '사용량 조회 실패';
+                elem.style.color = '#999';
+            }
+        });
+    }
+}
+
+// 페이지 로드 시 및 주기적으로 사용량 업데이트
+(function() {
+    // 초기 로드 시 사용량 조회
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() {
+            updateUsageInfo();
+            // 30초마다 사용량 업데이트
+            setInterval(updateUsageInfo, 30000);
+        });
+    } else {
+        updateUsageInfo();
+        setInterval(updateUsageInfo, 30000);
     }
 })();
 
@@ -286,6 +500,9 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
         const tabName = btn.dataset.tab;
         
+        // localStorage에 현재 탭 저장
+        localStorage.setItem('activeTab', tabName);
+        
         // 모든 탭 버튼과 콘텐츠 비활성화
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -297,50 +514,125 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
             activeContent.classList.add('active');
         }
 
+        // 탭 전환 시 모든 탭의 로딩 상태 초기화
+        const loadingDivs = ['process-loading', 'generate-loading', 'ideas-loading'];
+        loadingDivs.forEach(id => {
+            const loadingDiv = document.getElementById(id);
+            if (loadingDiv) {
+                loadingDiv.style.display = 'none';
+            }
+        });
+
         // 탭에 따라 결과 영역 표시/숨김 제어
         const resultDiv = document.getElementById('result');          // 블로그 에디터 영역
+        const resultContent = document.getElementById('result-content'); // 상위 블로그 분석 결과 영역
         const ideasResult = document.getElementById('ideas-result');  // 아이디어 결과 영역
 
-        if (tabName === 'ideas') {
-            if (resultDiv) resultDiv.style.display = 'none';
-            if (ideasResult && ideasResult.innerHTML.trim()) {
-                ideasResult.style.display = 'block';
+        if (tabName === 'process') {
+            // 상위 블로그 분석 탭: result-content만 표시 (전체 처리 결과)
+            if (resultDiv) {
+                resultDiv.style.display = 'block';
+                // 에디터 영역 숨김
+                const blogEditorSections = resultDiv.querySelector('.blog-editor-sections');
+                if (blogEditorSections) blogEditorSections.style.display = 'none';
+                const resultHeader = resultDiv.querySelector('.result-header');
+                if (resultHeader) resultHeader.style.display = 'none';
             }
-        } else {
-            if (resultDiv) resultDiv.style.display = 'block';
+            // result-content 표시 (기존 결과 유지)
+            if (resultContent) {
+                resultContent.style.display = 'block';
+            }
+            if (ideasResult) ideasResult.style.display = 'none';
+        } else if (tabName === 'ideas') {
+            // 아이디어 탭: 아이디어 결과만 표시 (프롬프트 결과)
+            if (resultDiv) resultDiv.style.display = 'none';
+            // result-content 숨김 (결과는 삭제하지 않음)
+            if (resultContent) {
+                resultContent.style.display = 'none';
+            }
+            // ideas-result 표시 (내용이 있으면)
+            if (ideasResult) {
+                const ideasResultContent = document.getElementById('ideas-result-content');
+                // 전역 변수에 저장된 결과 데이터가 있으면 복원
+                if (window.currentIdeasResult) {
+                    renderIdeasResult(window.currentIdeasResult);
+                    ideasResult.style.display = 'block';
+                } else if (ideasResultContent && ideasResultContent.innerHTML.trim()) {
+                    ideasResult.style.display = 'block';
+                } else {
+                    ideasResult.style.display = 'none';
+                }
+            }
+        } else if (tabName === 'generate') {
+            // 블로그 생성 탭: 에디터만 표시 (result-content 숨김)
+            if (resultDiv) {
+                resultDiv.style.display = 'block';
+                // 에디터 영역 표시
+                const blogEditorSections = resultDiv.querySelector('.blog-editor-sections');
+                if (blogEditorSections) blogEditorSections.style.display = 'block';
+                const resultHeader = resultDiv.querySelector('.result-header');
+                if (resultHeader) resultHeader.style.display = 'flex';
+            }
+            // result-content 숨김 (결과는 삭제하지 않음)
+            if (resultContent) {
+                resultContent.style.display = 'none';
+            }
             if (ideasResult) ideasResult.style.display = 'none';
         }
     });
 });
 
-// 로딩 표시
+// 로딩 표시 (현재 활성 탭의 로딩 요소 사용)
 function showLoading(message = '처리 중...') {
-    const loadingDiv = document.getElementById('loading');
-    const loadingMessage = document.getElementById('loading-message');
-    const loadingSteps = document.getElementById('loading-steps');
+    const activeTabBtn = document.querySelector('.tab-btn.active');
+    const activeTab = activeTabBtn ? activeTabBtn.dataset.tab : null;
     
-    if (loadingDiv) {
-        loadingDiv.style.display = 'block';
-        if (loadingMessage) {
-            loadingMessage.textContent = message;
-        }
-        if (loadingSteps) {
-            loadingSteps.innerHTML = '';
+    // 탭별 로딩 요소 ID 매핑
+    const loadingIds = {
+        'process': { div: 'process-loading', message: 'process-loading-message', steps: 'process-loading-steps' },
+        'generate': { div: 'generate-loading', message: 'generate-loading-message', steps: 'generate-loading-steps' },
+        'ideas': { div: 'ideas-loading', message: 'ideas-loading-message', steps: 'ideas-loading-steps' }
+    };
+    
+    const loadingId = activeTab && loadingIds[activeTab] ? loadingIds[activeTab] : null;
+    
+    if (loadingId) {
+        const loadingDiv = document.getElementById(loadingId.div);
+        const loadingMessage = document.getElementById(loadingId.message);
+        const loadingSteps = document.getElementById(loadingId.steps);
+        
+        if (loadingDiv) {
+            loadingDiv.style.display = 'block';
+            if (loadingMessage) {
+                loadingMessage.textContent = message;
+            }
+            if (loadingSteps) {
+                loadingSteps.innerHTML = '';
+            }
         }
     }
+    
     const errorDiv = document.getElementById('error');
     if (errorDiv) {
         errorDiv.style.display = 'none';
-    }
-    const ideasResult = document.getElementById('ideas-result');
-    if (ideasResult) {
-        ideasResult.style.display = 'none';
     }
 }
 
 function updateLoadingStep(step, status = 'pending') {
     // status: 'pending', 'processing', 'completed', 'error'
-    const loadingSteps = document.getElementById('loading-steps');
+    const activeTabBtn = document.querySelector('.tab-btn.active');
+    const activeTab = activeTabBtn ? activeTabBtn.dataset.tab : null;
+    
+    // 탭별 로딩 스텝 요소 ID 매핑
+    const loadingStepsIds = {
+        'process': 'process-loading-steps',
+        'generate': 'generate-loading-steps',
+        'ideas': 'ideas-loading-steps'
+    };
+    
+    const stepsId = activeTab && loadingStepsIds[activeTab] ? loadingStepsIds[activeTab] : null;
+    const loadingSteps = stepsId ? document.getElementById(stepsId) : null;
+    
     if (!loadingSteps) return;
     
     const stepId = `step-${step.replace(/\s+/g, '-').toLowerCase()}`;
@@ -376,24 +668,68 @@ function updateLoadingStep(step, status = 'pending') {
 }
 
 function hideLoading() {
-    const loadingDiv = document.getElementById('loading');
-    if (loadingDiv) {
-        loadingDiv.style.display = 'none';
-    }
+    // 모든 탭의 로딩 요소 숨기기
+    const loadingDivs = ['process-loading', 'generate-loading', 'ideas-loading'];
+    loadingDivs.forEach(id => {
+        const loadingDiv = document.getElementById(id);
+        if (loadingDiv) {
+            loadingDiv.style.display = 'none';
+        }
+    });
+    
     // 로딩이 끝나면 현재 탭에 맞게 결과 영역 표시/숨김
     const activeTabBtn = document.querySelector('.tab-btn.active');
     const activeTab = activeTabBtn ? activeTabBtn.dataset.tab : null;
     const resultDiv = document.getElementById('result');
+    const resultContent = document.getElementById('result-content');
     const ideasResult = document.getElementById('ideas-result');
 
-    if (activeTab === 'ideas') {
-        if (resultDiv) resultDiv.style.display = 'none';
-        if (ideasResult && ideasResult.innerHTML.trim()) {
-            ideasResult.style.display = 'block';
-        }
-    } else {
+    if (activeTab === 'process') {
+        // 상위 블로그 분석 탭: result-content만 표시 (에디터 숨김)
         if (resultDiv) resultDiv.style.display = 'block';
+        // 에디터 영역 숨김
+        const blogEditorSections = resultDiv?.querySelector('.blog-editor-sections');
+        if (blogEditorSections) blogEditorSections.style.display = 'none';
+        const resultHeader = resultDiv?.querySelector('.result-header');
+        if (resultHeader) resultHeader.style.display = 'none';
+        // result-content 표시 (기존 결과 유지)
+        if (resultContent) {
+            resultContent.style.display = 'block';
+        }
         if (ideasResult) ideasResult.style.display = 'none';
+    } else if (activeTab === 'ideas') {
+        // 아이디어 탭: 아이디어 결과만 표시 (에디터 숨김)
+        if (resultDiv) resultDiv.style.display = 'none';
+        // result-content 숨김 (결과는 삭제하지 않음)
+        if (resultContent) {
+            resultContent.style.display = 'none';
+        }
+        // ideas-result 표시 (내용이 있으면)
+        if (ideasResult) {
+            const ideasResultContent = document.getElementById('ideas-result-content');
+            // 전역 변수에 저장된 결과 데이터가 있으면 복원
+            if (window.currentIdeasResult) {
+                renderIdeasResult(window.currentIdeasResult);
+                ideasResult.style.display = 'block';
+            } else if (ideasResultContent && ideasResultContent.innerHTML.trim()) {
+                ideasResult.style.display = 'block';
+            } else {
+                ideasResult.style.display = 'none';
+            }
+        }
+    } else if (activeTab === 'generate') {
+        // 블로그 생성 탭: 에디터만 표시 (result-content 숨김)
+        if (resultDiv) resultDiv.style.display = 'block';
+        // result-content 숨김 (결과는 삭제하지 않음)
+        if (resultContent) {
+            resultContent.style.display = 'none';
+        }
+        if (ideasResult) ideasResult.style.display = 'none';
+        // 에디터 영역 표시
+        const blogEditorSections = resultDiv?.querySelector('.blog-editor-sections');
+        if (blogEditorSections) blogEditorSections.style.display = 'block';
+        const resultHeader = resultDiv?.querySelector('.result-header');
+        if (resultHeader) resultHeader.style.display = 'flex';
     }
 }
 
@@ -423,17 +759,78 @@ function showResult(data, type = 'default') {
     // 타입에 따라 다른 렌더링
     switch (type) {
         case 'process': {
+            // 상위 블로그 분석 결과 표시 - result-content만 표시
+            if (resultDiv) {
+                resultDiv.style.display = 'block';
+                // 에디터 영역은 숨김
+                const blogEditorSections = resultDiv.querySelector('.blog-editor-sections');
+                if (blogEditorSections) {
+                    blogEditorSections.style.display = 'none';
+                }
+                const resultHeader = resultDiv.querySelector('.result-header');
+                if (resultHeader) {
+                    resultHeader.style.display = 'none';
+                }
+            }
             if (resultContent) {
                 resultContent.innerHTML = renderProcessResult(data);
+                resultContent.style.display = 'block';
             }
+            // 다른 결과 영역 숨김
+            const ideasResult = document.getElementById('ideas-result');
+            if (ideasResult) ideasResult.style.display = 'none';
             break;
         }
         case 'generate': {
+            // 블로그 생성 결과 표시 - 에디터만 표시
+            if (resultDiv) {
+                resultDiv.style.display = 'block';
+                // result-content 영역은 숨김
+                if (resultContent) {
+                    resultContent.innerHTML = '';
+                    resultContent.style.display = 'none';
+                }
+                // 에디터 영역 표시
+                const blogEditorSections = resultDiv.querySelector('.blog-editor-sections');
+                if (blogEditorSections) {
+                    blogEditorSections.style.display = 'block';
+                }
+                const resultHeader = resultDiv.querySelector('.result-header');
+                if (resultHeader) {
+                    resultHeader.style.display = 'flex';
+                }
+            }
+            // 다른 결과 영역 숨김
+            const ideasResult = document.getElementById('ideas-result');
+            if (ideasResult) ideasResult.style.display = 'none';
             // 제목, 본문, 태그로 분리된 에디터에 렌더링
             const content = data.blog_content || data;
             renderBlogContentSeparated(content);
             // 현재 블로그 콘텐츠 저장 (복사 기능용)
             window.currentBlogContent = content;
+            
+            // 이미지 다운로드 버튼 활성화/비활성화 (에디터 렌더링 후 실행)
+            setTimeout(() => {
+                const downloadImagesBtn = document.getElementById('download-images-btn');
+                if (downloadImagesBtn) {
+                    const hasImages = content.generated_images && content.generated_images.length > 0;
+                    console.log('[이미지 다운로드 버튼]', {
+                        hasImages,
+                        generated_images: content.generated_images,
+                        button: downloadImagesBtn
+                    });
+                    // 버튼은 항상 표시하되, 이미지가 없으면 비활성화
+                    downloadImagesBtn.disabled = !hasImages;
+                    downloadImagesBtn.style.display = 'inline-block';
+                    if (!hasImages) {
+                        downloadImagesBtn.title = '생성된 이미지가 없습니다';
+                    } else {
+                        downloadImagesBtn.title = '';
+                    }
+                } else {
+                    console.warn('[이미지 다운로드 버튼] 버튼을 찾을 수 없음');
+                }
+            }, 300);
             break;
         }
         default: {
@@ -456,77 +853,65 @@ function renderProcessResult(data) {
             성공: <strong>${data.success_count}개</strong> | 
             실패: <strong>${data.total_count - data.success_count}개</strong>
         </p>
-        <p class="output-dir"><strong>출력 디렉토리:</strong> ${data.output_dir}</p>
     </div>`;
     
     if (data.results && data.results.length > 0) {
         html += '<div class="process-results-list">';
         data.results.forEach((result, index) => {
+            const cardId = `process-card-${result.rank}`;
             html += `
                 <div class="process-result-card ${result.success ? 'success' : 'error'}">
-                    <div class="result-card-header">
+                    <div class="result-card-header" onclick="toggleProcessCard('${cardId}')" style="cursor: pointer; user-select: none;">
                         <span class="result-rank">TOP ${result.rank}</span>
                         <span class="result-status-badge ${result.success ? 'success' : 'error'}">
                             ${result.success ? '✅ 성공' : '❌ 실패'}
                         </span>
+                        <span class="card-toggle-icon" id="${cardId}-icon">▼</span>
                     </div>
-                    <div class="result-card-body">
-                        <h4 class="result-title">${escapeHtml(result.title)}</h4>
-                        <p><strong>URL:</strong> <a href="${result.url}" target="_blank">${result.url}</a></p>
-                        ${result.body_length ? `<p><strong>본문 길이:</strong> ${result.body_length.toLocaleString()}자</p>` : ''}
-                        ${result.txt_path ? `<p><strong>TXT 파일:</strong> ${result.txt_path}</p>` : ''}
-                        ${result.excel_path ? `<p><strong>엑셀 파일:</strong> ${result.excel_path}</p>` : ''}
+                    <div class="result-card-body" id="${cardId}" style="display: none;">
+                        <!-- 1. 링크 -->
+                        <div class="result-field">
+                            <strong class="field-label">링크:</strong>
+                            <a href="${result.url}" target="_blank" class="result-link">${escapeHtml(result.url)}</a>
+                        </div>
+                        
+                        <!-- 2. 제목 -->
+                        <div class="result-field">
+                            <strong class="field-label">제목:</strong>
+                            <h4 class="result-title">${escapeHtml(result.title)}</h4>
+                        </div>
+                        
+                        <!-- 3. 키워드 -->
                         ${result.keywords && result.keywords.length > 0 ? `
-                            <div class="keywords-preview">
-                                <strong>주요 키워드:</strong>
+                            <div class="result-field">
+                                <strong class="field-label">키워드:</strong>
                                 <div class="keyword-tags">
-                                    ${result.keywords.slice(0, 10).map(k => `<span class="keyword-tag">${escapeHtml(k.keyword)} (${k.count})</span>`).join('')}
+                                    ${result.keywords.slice(0, 20).map(k => `<span class="keyword-tag">${escapeHtml(k.keyword)} (${k.count})</span>`).join('')}
                                 </div>
                             </div>
                         ` : ''}
-                        ${result.image_urls && result.image_urls.length > 0 ? `
-                            <div class="images-container" style="margin-top: 20px;">
-                                <h4 style="margin-bottom: 15px; color: #333;">이미지 (${result.image_urls.length}개)</h4>
-                                <div class="images-grid">
-                                    ${result.image_urls.map((imgUrl, idx) => {
-                                        // output_dir이 있으면 전달 (process 결과인 경우)
-                                        const outputDir = data.output_dir ? `${data.output_dir}/TOP${result.rank}` : null;
-                                        const proxyUrl = getProxyImageUrl(imgUrl, outputDir);
-                                        const originalUrl = imgUrl.startsWith('/') ? imgUrl : imgUrl.split('?url=')[1] ? decodeURIComponent(imgUrl.split('?url=')[1].split('&')[0]) : imgUrl;
-                                        return `
-                                        <div class="image-item">
-                                            <img src="${proxyUrl}" 
-                                                 alt="이미지 ${idx + 1}" 
-                                                 loading="lazy"
-                                                 data-original-url="${escapeHtml(originalUrl)}"
-                                                 onerror="console.error('이미지 로드 실패:', '${originalUrl}'); this.style.display='none'; this.nextElementSibling.style.display='block';"
-                                                 onload="console.log('이미지 로드 성공:', '${originalUrl}');">
-                                            <div class="image-error" style="display: none;">이미지를 불러올 수 없습니다<br><small>${escapeHtml(originalUrl)}</small></div>
-                                            <a href="${originalUrl}" target="_blank" class="image-link">원본 보기</a>
-                                        </div>
-                                    `;
-                                    }).join('')}
-                                </div>
+                        
+                        <!-- 4. 본문 글자수 -->
+                        ${result.body_length ? `
+                            <div class="result-field">
+                                <strong class="field-label">본문 글자수:</strong>
+                                <span class="body-length">${result.body_length.toLocaleString()}자</span>
                             </div>
                         ` : ''}
-                        ${result.link_urls && result.link_urls.length > 0 ? `
-                            <div class="links-container" style="margin-top: 15px;">
-                                <h4 style="margin-bottom: 10px; color: #333;">링크 (${result.link_urls.length}개)</h4>
-                                <div class="links-list">
-                                    ${result.link_urls.map((linkUrl, idx) => `
-                                        <div class="link-item">
-                                            <a href="${linkUrl}" target="_blank">${escapeHtml(linkUrl)}</a>
-                                        </div>
-                                    `).join('')}
-                                </div>
-                            </div>
-                        ` : ''}
+                        
+                        <!-- 5. 본문 (이미지/링크 포함) -->
                         ${result.body_text && result.body_text.trim() ? `
-                            <div class="body-text-container" style="margin-top: 20px;">
-                                <h4 style="margin-bottom: 15px; color: #333;">본문 내용</h4>
-                                <div class="body-text">${formatText(String(result.body_text).trim())}</div>
+                            <div class="result-field body-text-field">
+                                <strong class="field-label">본문:</strong>
+                                ${formatProcessBodyText(
+                                    String(result.body_text).trim(),
+                                    result.image_urls || [],
+                                    result.link_urls || [],
+                                    data.output_dir ? `${data.output_dir}/TOP${result.rank}` : null
+                                )}
                             </div>
                         ` : ''}
+                        
                         ${result.error ? `<p class="error-text"><strong>오류:</strong> ${escapeHtml(result.error)}</p>` : ''}
                     </div>
                 </div>
@@ -536,6 +921,21 @@ function renderProcessResult(data) {
     }
     
     return html;
+}
+
+// 프로세스 결과 카드 토글 함수
+function toggleProcessCard(cardId) {
+    const cardBody = document.getElementById(cardId);
+    const icon = document.getElementById(`${cardId}-icon`);
+    if (cardBody && icon) {
+        if (cardBody.style.display === 'none') {
+            cardBody.style.display = 'block';
+            icon.textContent = '▲';
+        } else {
+            cardBody.style.display = 'none';
+            icon.textContent = '▼';
+        }
+    }
 }
 
 // 유틸리티 함수들
@@ -567,6 +967,92 @@ function formatText(text) {
     return formatted;
 }
 
+// 상위 블로그 분석용 본문 포맷팅 (이미지/링크를 실제로 표시)
+function formatProcessBodyText(text, imageUrls, linkUrls, outputDir) {
+    if (!text) {
+        return '<div class="body-text">본문이 없습니다.</div>';
+    }
+    
+    // 이미지와 링크 HTML을 먼저 생성
+    const imageHtmls = [];
+    const linkHtmls = [];
+    
+    // 이미지 HTML 생성
+    imageUrls.forEach((imgUrl, idx) => {
+        const proxyUrl = getProxyImageUrl(imgUrl, outputDir);
+        const originalUrl = imgUrl.startsWith('/') ? imgUrl : imgUrl.split('?url=')[1] ? decodeURIComponent(imgUrl.split('?url=')[1].split('&')[0]) : imgUrl;
+        imageHtmls.push(`<div class="process-body-image" style="margin: 15px 0; text-align: center;"><img src="${proxyUrl}" alt="이미지 ${idx + 1}" style="width: 400px; height: auto; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);" loading="lazy" data-original-url="${escapeHtml(originalUrl)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';"><div class="image-error" style="display: none; padding: 10px; background: #ffecec; border-radius: 4px; margin-top: 5px;">이미지를 불러올 수 없습니다<br><small><a href="${originalUrl}" target="_blank">${escapeHtml(originalUrl)}</a></small></div></div>`);
+    });
+    
+    // 링크 HTML 생성
+    linkUrls.forEach((linkUrl) => {
+        linkHtmls.push(`<a href="${linkUrl}" target="_blank" style="color: #3BB1E2; text-decoration: underline;">${escapeHtml(linkUrl)}</a>`);
+    });
+    
+    // 마커를 임시 플레이스홀더로 교체 (이스케이프 전에 처리)
+    let formatted = text;
+    const placeholders = [];
+    
+    // 이미지 마커를 플레이스홀더로 교체
+    let imageIndex = 0;
+    formatted = formatted.replace(/\[이미지 삽입\d*\]/g, (match) => {
+        if (imageIndex < imageHtmls.length) {
+            const placeholder = `__IMAGE_PLACEHOLDER_${imageIndex}__`;
+            placeholders.push({ placeholder, html: imageHtmls[imageIndex] });
+            imageIndex++;
+            return placeholder;
+        }
+        return match; // 이미지가 없으면 마커 그대로 유지
+    });
+    
+    // 링크 마커를 플레이스홀더로 교체
+    let linkIndex = 0;
+    formatted = formatted.replace(/\[링크 삽입\d*\]/g, (match) => {
+        if (linkIndex < linkHtmls.length) {
+            const placeholder = `__LINK_PLACEHOLDER_${linkIndex}__`;
+            placeholders.push({ placeholder, html: linkHtmls[linkIndex] });
+            linkIndex++;
+            return placeholder;
+        }
+        return match; // 링크가 없으면 마커 그대로 유지
+    });
+    
+    // 이제 텍스트를 이스케이프
+    formatted = escapeHtml(formatted);
+    
+    // 플레이스홀더를 실제 HTML로 교체
+    placeholders.forEach(({ placeholder, html }) => {
+        formatted = formatted.replace(escapeHtml(placeholder), html);
+    });
+    
+    // 이모티콘 마커는 그대로 유지 (하이라이트만)
+    formatted = formatted.replace(/\[이모티콘 삽입\d*\]/g, '<span class="media-marker emoji-marker">$&</span>');
+    
+    // 줄바꿈 처리
+    formatted = formatted.replace(/\n/g, '<br>');
+    
+    // 이미지/링크 갯수 표시
+    const imageCount = imageUrls.length;
+    const linkCount = linkUrls.length;
+    let countInfo = '';
+    if (imageCount > 0 || linkCount > 0) {
+        countInfo = '<div style="margin-bottom: 15px; padding: 10px; background: #f5f5f5; border-radius: 4px; font-size: 0.9rem; color: #666;">';
+        if (imageCount > 0) {
+            countInfo += `<strong>이미지:</strong> ${imageCount}개 `;
+        }
+        if (linkCount > 0) {
+            if (imageCount > 0) countInfo += '| ';
+            countInfo += `<strong>링크:</strong> ${linkCount}개`;
+        }
+        countInfo += '</div>';
+    }
+    
+    return `
+        ${countInfo}
+        <div class="body-text">${formatted}</div>
+    `;
+}
+
 // 전체 처리
 async function handleProcess() {
     const keyword = document.getElementById('process-keyword').value.trim();
@@ -580,9 +1066,88 @@ async function handleProcess() {
         alert('검색 키워드를 입력하세요.');
         return;
     }
+    
+    // 블로그 개수 제한 확인
+    if (count > 3) {
+        alert('무료버전은 최대 3개까지만 처리할 수 있습니다.');
+        document.getElementById('process-count').value = '3';
+        return;
+    }
 
-    showLoading('전체 처리 시작...');
-    updateLoadingStep('블로그 검색 중', 'processing');
+    // 결과 영역 표시 및 로딩 메시지 표시
+    const resultDiv = document.getElementById('result');
+    const resultContent = document.getElementById('result-content');
+    
+    // process-loading은 사용하지 않음 (resultContent에 진행률 바가 표시됨)
+    
+    if (resultDiv) {
+        resultDiv.style.display = 'block';
+        // 에디터 영역은 숨김
+        const blogEditorSections = resultDiv.querySelector('.blog-editor-sections');
+        if (blogEditorSections) {
+            blogEditorSections.style.display = 'none';
+        }
+        const resultHeader = resultDiv.querySelector('.result-header');
+        if (resultHeader) {
+            resultHeader.style.display = 'none';
+        }
+    }
+    if (resultContent) {
+        resultContent.style.display = 'block';
+        resultContent.innerHTML = `
+            <div style="display: flex; align-items: center; justify-content: center; min-height: 300px; flex-direction: column; gap: 20px;">
+                <div class="spinner" style="border-top-color: #3BB1E2;"></div>
+                <p id="process-loading-text" style="font-size: 1.1rem; color: #666; font-weight: 500; margin-bottom: 10px;">상위 블로그를 분석 중입니다...</p>
+                <div style="width: 300px; background: #e0e0e0; border-radius: 10px; overflow: hidden; height: 8px;">
+                    <div id="process-progress-bar" style="width: 1%; height: 100%; background: linear-gradient(90deg, #3BB1E2, #667eea); transition: width 0.3s ease; border-radius: 10px;"></div>
+                </div>
+                <p id="process-progress-text" style="font-size: 0.9rem; color: #999; margin-top: 5px;">1%</p>
+            </div>
+        `;
+    }
+
+    // 진행률 업데이트 함수
+    function updateProcessProgress(current, total, label) {
+        const percentage = Math.min(Math.max((current / total) * 100, 1), 100); // 최소 1%, 최대 100%
+        const progressBar = document.getElementById('process-progress-bar');
+        const progressText = document.getElementById('process-progress-text');
+        const loadingText = document.getElementById('process-loading-text');
+        
+        if (progressBar) {
+            progressBar.style.width = `${percentage}%`;
+        }
+        if (progressText) {
+            progressText.textContent = `${Math.round(percentage)}%`;
+        }
+        if (loadingText && label) {
+            loadingText.textContent = label;
+        }
+    }
+    
+    // 진행률 관련 변수 (함수 스코프 밖에서 접근 가능하도록)
+    let searchProgressInterval = null;
+    let crawlProgressInterval = null;
+    let currentProgressValue = 0; // 현재 진행률 값 추적
+    
+    // 초기 진행률 표시 (1%)
+    currentProgressValue = 1;
+    updateProcessProgress(0, count, `상위 블로그를 분석 중입니다... (0/${count})`);
+    
+    // 진행률 시뮬레이션 (블로그 검색 단계: 1% ~ 20%)
+    let searchProgress = 1;
+    searchProgressInterval = setInterval(() => {
+        searchProgress += 0.3;
+        if (searchProgress <= 20) {
+            const progressPercent = (searchProgress / 20) * 0.2; // 0~20% 범위를 0~0.2로 매핑
+            const currentBlogs = Math.floor(progressPercent * count);
+            currentProgressValue = progressPercent * count;
+            updateProcessProgress(currentProgressValue, count, `블로그 검색 중... (${currentBlogs}/${count})`);
+        } else {
+            clearInterval(searchProgressInterval);
+            searchProgressInterval = null;
+            currentProgressValue = count * 0.2; // 20% 완료
+        }
+        }, 100);
 
     try {
         const response = await fetch(`${API_BASE_URL}/api/process`, {
@@ -599,36 +1164,99 @@ async function handleProcess() {
                 min_count: minCount
             })
         });
+        
+        // 블로그 크롤링 진행률 시뮬레이션 (20% ~ 95%)
+        if (searchProgressInterval) {
+            clearInterval(searchProgressInterval);
+            searchProgressInterval = null;
+        }
+        
+        // 현재 진행률에서 시작 (20% = count * 0.2)
+        const startProgress = currentProgressValue;
+        const targetProgress = count * 0.95; // 95%까지 시뮬레이션
+        const progressRange = targetProgress - startProgress;
+        const steps = 50; // 50단계로 나누어 부드럽게 진행
+        const stepIncrement = progressRange / steps;
+        let crawlStep = 0;
+        
+        crawlProgressInterval = setInterval(() => {
+            crawlStep++;
+            const newProgress = Math.min(startProgress + (stepIncrement * crawlStep), targetProgress);
+            currentProgressValue = newProgress;
+            const completedBlogs = Math.floor(newProgress);
+            const remainingBlogs = count - completedBlogs;
+            
+            if (newProgress < targetProgress) {
+                updateProcessProgress(newProgress, count, `블로그 크롤링 중... (${completedBlogs}/${count})`);
+            } else {
+                clearInterval(crawlProgressInterval);
+                crawlProgressInterval = null;
+                currentProgressValue = targetProgress;
+                updateProcessProgress(targetProgress, count, `블로그 크롤링 중... (${completedBlogs}/${count})`);
+            }
+        }, 150);
 
-        updateLoadingStep('블로그 검색 중', 'completed');
-        updateLoadingStep('블로그 크롤링 중', 'processing');
+        // 응답이 JSON인지 확인
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+            const text = await response.text();
+            throw new Error(`서버 응답 오류: ${text.substring(0, 100)}`);
+        }
 
         const data = await response.json();
         
         if (!response.ok) {
             throw new Error(data.detail || '처리 실패');
         }
-
-        updateLoadingStep('블로그 크롤링 중', 'completed');
+        
+        // 크롤링 완료 후 진행률을 부드럽게 100%로 증가
+        if (crawlProgressInterval) {
+            clearInterval(crawlProgressInterval);
+            crawlProgressInterval = null;
+        }
+        
+        // 현재 진행률에서 100%까지 부드럽게 증가
+        const finalStartProgress = currentProgressValue;
+        const finalTargetProgress = count;
+        const finalProgressRange = finalTargetProgress - finalStartProgress;
+        const finalSteps = 20;
+        const finalStepIncrement = finalProgressRange / finalSteps;
+        let finalStep = 0;
+        
+        const finalProgressInterval = setInterval(() => {
+            finalStep++;
+            const newProgress = Math.min(finalStartProgress + (finalStepIncrement * finalStep), finalTargetProgress);
+            currentProgressValue = newProgress;
+            updateProcessProgress(newProgress, count, `블로그 크롤링 완료 (${count}/${count})`);
+            
+            if (finalStep >= finalSteps || newProgress >= finalTargetProgress) {
+                clearInterval(finalProgressInterval);
+                currentProgressValue = finalTargetProgress;
+                updateProcessProgress(finalTargetProgress, count, `블로그 크롤링 완료 (${count}/${count})`);
+            }
+        }, 50);
         
         if (analyze) {
-            updateLoadingStep('키워드 분석 중', 'processing');
+            // 키워드 분석 중에도 진행률은 100% 유지
             setTimeout(() => {
-                updateLoadingStep('키워드 분석 중', 'completed');
-                showLoading('완료!');
                 setTimeout(() => {
                     showResult(data, 'process');
                 }, 500);
             }, 500);
         } else {
-            showLoading('완료!');
             setTimeout(() => {
                 showResult(data, 'process');
+                // 사용량 업데이트
+                updateUsageInfo();
             }, 500);
         }
     } catch (error) {
+        // 에러 발생 시 진행률 바 제거
+        const resultContent = document.getElementById('result-content');
+        if (resultContent) {
+            resultContent.innerHTML = '';
+        }
         showError(error.message);
-        hideLoading();
     }
 }
 
@@ -720,18 +1348,180 @@ async function handleGenerateBlog() {
     // 이미지 생성 여부 확인
     const generateImages = document.getElementById('generate-images').checked;
 
-    showLoading('블로그 생성 시작...');
+    // 결과 영역 표시 및 로딩 메시지 표시
+    const resultDiv = document.getElementById('result');
+    const resultContent = document.getElementById('result-content');
+    if (resultDiv) {
+        resultDiv.style.display = 'block';
+        // result-content 영역은 숨김 (에디터 영역만 표시)
+        if (resultContent) {
+            resultContent.innerHTML = '';
+            resultContent.style.display = 'none';
+        }
+        // 에디터 영역 표시
+        const blogEditorSections = resultDiv.querySelector('.blog-editor-sections');
+        if (blogEditorSections) {
+            blogEditorSections.style.display = 'block';
+            blogEditorSections.style.position = 'relative';
+            // 기존 로딩 오버레이 제거
+            const existingOverlay = blogEditorSections.querySelector('#blog-generate-loading');
+            if (existingOverlay) {
+                existingOverlay.remove();
+            }
+            // 로딩 오버레이 추가
+            const loadingOverlay = document.createElement('div');
+            loadingOverlay.id = 'blog-generate-loading';
+            loadingOverlay.style.cssText = 'display: flex; align-items: center; justify-content: center; min-height: 400px; flex-direction: column; gap: 20px; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255, 255, 255, 0.95); z-index: 100;';
+            loadingOverlay.innerHTML = `
+                <div class="spinner" style="border-top-color: #3BB1E2;"></div>
+                <p id="blog-generate-loading-text" style="font-size: 1.1rem; color: #666; font-weight: 500; margin-bottom: 10px;">블로그를 생성 중입니다...</p>
+                <div style="width: 300px; background: #e0e0e0; border-radius: 10px; overflow: hidden; height: 8px;">
+                    <div id="blog-generate-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #3BB1E2, #667eea); transition: width 0.3s ease; border-radius: 10px;"></div>
+                </div>
+                <p id="blog-generate-progress-text" style="font-size: 0.9rem; color: #999; margin-top: 5px;">0%</p>
+            `;
+            blogEditorSections.appendChild(loadingOverlay);
+        }
+        const resultHeader = resultDiv.querySelector('.result-header');
+        if (resultHeader) {
+            resultHeader.style.display = 'flex';
+        }
+    }
+
+    // 전체 단계 수 계산
+    const hasReferenceStep = useAutoReference || (manualReferenceUrls && manualReferenceUrls.length > 0);
+    const hasImageStep = generateImages;
+    
+    // 각 단계별 진행률 범위 정의
+    let progressRanges = [];
+    let currentProgressIndex = 0;
+    
+    if (hasReferenceStep) {
+        progressRanges.push({ start: 0, end: 15, label: '상위 블로그 분석 중' });
+    }
+    progressRanges.push({ start: hasReferenceStep ? 15 : 0, end: 70, label: '블로그 글 생성 중' });
+    if (hasImageStep) {
+        progressRanges.push({ start: 70, end: 95, label: '이미지 생성 중' });
+    }
+    progressRanges.push({ start: hasImageStep ? 95 : 70, end: 100, label: '파일 저장 중' });
+    
+    // 프로그레스 바 업데이트 함수
+    function updateProgress(percentage, label) {
+        const progressBar = document.getElementById('blog-generate-progress-bar');
+        const progressText = document.getElementById('blog-generate-progress-text');
+        
+        if (progressBar) {
+            progressBar.style.width = `${percentage}%`;
+        }
+        if (progressText) {
+            progressText.textContent = `${Math.round(percentage)}%`;
+        }
+        if (label) {
+            const loadingText = document.getElementById('blog-generate-loading-text');
+            if (loadingText) {
+                loadingText.textContent = label;
+            }
+        }
+    }
+    
+    // 진행 중인 시뮬레이션 인터벌 추적
+    let currentSimulationInterval = null;
+    let currentProgressValue = 0; // 현재 진행률 값 추적
+    
+    // 단계별 진행률 시뮬레이션 함수
+    function simulateStepProgress(startPercent, endPercent, label, duration = 1000) {
+        // 기존 시뮬레이션 중지
+        if (currentSimulationInterval) {
+            clearInterval(currentSimulationInterval);
+        }
+        
+        const startProgress = Math.max(startPercent, currentProgressValue); // 현재 진행률부터 시작
+        const endProgress = endPercent;
+        const steps = 30; // 30단계로 나누어 더 부드럽게 진행
+        const stepDuration = duration / steps;
+        const stepIncrement = (endProgress - startProgress) / steps;
+        
+        let currentStep = 0;
+        currentSimulationInterval = setInterval(() => {
+            currentStep++;
+            const currentProgress = Math.min(startProgress + (stepIncrement * currentStep), endProgress);
+            currentProgressValue = currentProgress; // 현재 진행률 저장
+            updateProgress(currentProgress, label);
+            
+            if (currentStep >= steps || currentProgress >= endProgress) {
+                clearInterval(currentSimulationInterval);
+                currentSimulationInterval = null;
+                currentProgressValue = endProgress;
+            }
+        }, stepDuration);
+    }
+    
+    // 시뮬레이션 즉시 완료 함수 (부드럽게 증가)
+    function completeSimulation(endPercent, label) {
+        if (currentSimulationInterval) {
+            clearInterval(currentSimulationInterval);
+            currentSimulationInterval = null;
+        }
+        
+        // 현재 진행률이 목표보다 낮으면 부드럽게 증가
+        if (currentProgressValue < endPercent) {
+            const diff = endPercent - currentProgressValue;
+            const steps = 10;
+            const stepIncrement = diff / steps;
+            let step = 0;
+            
+            const smoothInterval = setInterval(() => {
+                step++;
+                const newProgress = Math.min(currentProgressValue + (stepIncrement * step), endPercent);
+                currentProgressValue = newProgress;
+                updateProgress(newProgress, label);
+                
+                if (step >= steps || newProgress >= endPercent) {
+                    clearInterval(smoothInterval);
+                    currentProgressValue = endPercent;
+                    updateProgress(endPercent, label);
+                }
+            }, 50);
+        } else {
+            updateProgress(endPercent, label);
+            currentProgressValue = endPercent;
+        }
+    }
+    
+    // 초기 진행률 표시
+    currentProgressValue = 0;
+    updateProgress(0, progressRanges[0]?.label || '블로그를 생성 중입니다...');
 
     try {
         const banWordsList = banWords ? banWords.split(',').map(w => w.trim()).filter(w => w) : null;
 
-        // 단계별 진행 상황 표시
-        if (useAutoReference || (manualReferenceUrls && manualReferenceUrls.length > 0)) {
-            updateLoadingStep('상위 블로그 분석 중', 'processing');
+        // 첫 번째 단계 시작 (상위 블로그 분석 또는 블로그 글 생성)
+        if (hasReferenceStep) {
+            simulateStepProgress(0, 15, '상위 블로그 분석 중', 2000); // 상위 블로그 분석 시뮬레이션
+        } else {
+            // 상위 블로그 분석이 없으면 바로 블로그 글 생성 시작
+            simulateStepProgress(0, 70, '블로그 글 생성 중', 30000); // 블로그 글 생성은 더 오래 걸림 (30초)
         }
-        
-        updateLoadingStep('블로그 글 생성 중', 'processing');
 
+        // 백엔드 요청 전에 블로그 글 생성 시뮬레이션 시작 (상위 블로그 분석이 있는 경우)
+        let blogGenerationSimulationStarted = false;
+        if (hasReferenceStep) {
+            // 상위 블로그 분석이 완료되면 블로그 글 생성 시뮬레이션 시작
+            const startBlogGen = setTimeout(() => {
+                if (currentProgressValue < 15) {
+                    currentProgressValue = 15;
+                    updateProgress(15, '블로그 글 생성 중');
+                }
+                // 백엔드 응답을 기다리는 동안 계속 진행률 증가
+                simulateStepProgress(Math.max(15, currentProgressValue), 70, '블로그 글 생성 중', 30000);
+                blogGenerationSimulationStarted = true;
+            }, 2100); // 상위 블로그 분석 완료 후 시작
+        }
+
+        // 타임아웃 설정 (5분 = 300초)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 300000); // 5분 타임아웃
+        
         const response = await fetch(`${API_BASE_URL}/api/generate-blog`, {
             method: 'POST',
             headers: {
@@ -748,16 +1538,32 @@ async function handleGenerateBlog() {
                 external_links: externalLinks,
                 generate_images: generateImages,
                 save_json: true
-            })
+            }),
+            signal: controller.signal
         });
+        
+        clearTimeout(timeoutId);
 
-        // 상위 블로그 분석 완료
-        if (useAutoReference || (manualReferenceUrls && manualReferenceUrls.length > 0)) {
-            updateLoadingStep('상위 블로그 분석 중', 'completed');
+        // 상위 블로그 분석 완료 → 블로그 글 생성 시작
+        // 백엔드 응답을 기다리는 동안 블로그 글 생성 시뮬레이션 계속 실행
+        if (hasReferenceStep && !blogGenerationSimulationStarted) {
+            // 15%로 즉시 설정하고 블로그 글 생성 시뮬레이션 시작
+            if (currentProgressValue < 15) {
+                currentProgressValue = 15;
+                updateProgress(15, '블로그 글 생성 중');
+            }
+            // 백엔드 응답을 기다리는 동안 계속 진행률 증가 (30초 동안 15% → 70%)
+            simulateStepProgress(Math.max(15, currentProgressValue), 70, '블로그 글 생성 중', 30000);
+            blogGenerationSimulationStarted = true;
         }
+        // else는 이미 위에서 블로그 글 생성 시뮬레이션이 시작되었으므로 추가 작업 불필요
 
-        // 블로그 글 생성 완료
-        updateLoadingStep('블로그 글 생성 중', 'completed');
+        // 응답이 JSON인지 확인
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+            const text = await response.text();
+            throw new Error(`서버 응답 오류: ${text.substring(0, 100)}`);
+        }
 
         const data = await response.json();
         
@@ -765,53 +1571,91 @@ async function handleGenerateBlog() {
             throw new Error(data.error || '블로그 생성 실패');
         }
 
-        // 이미지 재시도 정보가 있는 경우 표시
-        if (generateImages && typeof data.image_retry_count === 'number' && data.image_retry_count > 0) {
-            updateLoadingStep('이미지 생성 재시도 중입니다...', 'processing');
-            setTimeout(() => {
-                updateLoadingStep('이미지 생성 재시도 중입니다...', 'completed');
-            }, 500);
-        }
-
-        // 이미지 생성 단계 표시 (체크박스가 활성화된 경우만)
-        if (generateImages && data.blog_content && data.blog_content.generated_images && data.blog_content.generated_images.length > 0) {
-            const imageCount = data.blog_content.generated_images.length;
-            updateLoadingStep(`이미지 생성 중 (${imageCount}개)`, 'processing');
+        // 블로그 글 생성 완료 (백엔드 응답 수신 시)
+        // 현재 진행률이 70% 미만이면 부드럽게 70%까지 증가 (최소 1초는 진행률 증가)
+        const targetProgress = 70;
+        if (currentProgressValue < targetProgress) {
+            // 현재 진행률에서 70%까지 부드럽게 증가 (최소 1초)
+            const diff = targetProgress - currentProgressValue;
+            const minDuration = 1000; // 최소 1초
+            const steps = Math.max(20, Math.ceil(diff / 2)); // 최소 20단계
+            const stepDuration = minDuration / steps;
+            const stepIncrement = diff / steps;
             
-            // 이미지 생성은 백엔드에서 이미 완료되었으므로 완료로 표시
-            setTimeout(() => {
-                updateLoadingStep(`이미지 생성 중 (${imageCount}개)`, 'completed');
-            }, 500);
-        } else if (generateImages) {
-            // 이미지 생성이 활성화되었지만 생성된 이미지가 없는 경우 (플레이스홀더가 없거나 생성 실패)
-            const imagePlaceholders = data.blog_content?.body?.flatMap(section => 
-                section.blocks?.filter(block => block.type === 'image_placeholder') || []
-            ) || [];
-            if (imagePlaceholders.length > 0) {
-                updateLoadingStep('이미지 생성 중', 'processing');
-                setTimeout(() => {
-                    updateLoadingStep('이미지 생성 중', 'completed');
-                }, 500);
-            }
+            let step = 0;
+            const smoothInterval = setInterval(() => {
+                step++;
+                const newProgress = Math.min(currentProgressValue + (stepIncrement * step), targetProgress);
+                currentProgressValue = newProgress;
+                updateProgress(newProgress, '블로그 글 생성 중');
+                
+                if (step >= steps || newProgress >= targetProgress) {
+                    clearInterval(smoothInterval);
+                    currentProgressValue = targetProgress;
+                    updateProgress(targetProgress, '블로그 글 생성 완료');
+                }
+            }, stepDuration);
+            
+            // 최소 1초 대기
+            await new Promise(resolve => setTimeout(resolve, minDuration));
+        } else {
+            updateProgress(70, '블로그 글 생성 완료');
+            currentProgressValue = 70;
+            await new Promise(resolve => setTimeout(resolve, 300));
         }
 
-        // 저장 중
-        updateLoadingStep('파일 저장 중', 'processing');
-        
-        if (data.json_path) {
-            updateLoadingStep('파일 저장 중', 'completed');
+        // 이미지 생성 단계 (체크박스가 활성화된 경우만)
+        if (hasImageStep) {
+            const imageCount = data.blog_content?.generated_images?.length || 0;
+            const imageLabel = imageCount > 0 ? `이미지 생성 중 (${imageCount}개)` : '이미지 생성 중';
+            // 이미지 생성 시뮬레이션 (70% → 95%)
+            simulateStepProgress(70, 95, imageLabel, 2000);
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            updateProgress(95, imageCount > 0 ? `이미지 생성 완료 (${imageCount}개)` : '이미지 생성 완료');
+            currentProgressValue = 95;
         }
+
+        // 파일 저장 단계
+        const saveStartPercent = hasImageStep ? 95 : 70;
+        const saveLabel = '파일 저장 중';
+        updateProgress(saveStartPercent, saveLabel);
+        // 파일 저장 시뮬레이션
+        simulateStepProgress(saveStartPercent, 100, saveLabel, 1000);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        updateProgress(100, '파일 저장 완료');
+        currentProgressValue = 100;
 
         // 완료 메시지
         setTimeout(() => {
-            showLoading('완료!');
+            // 100% 완료 표시
+            updateProgress(100, '완료!');
+            
             setTimeout(() => {
-                hideLoading();
+                // 로딩 오버레이 제거
+                const blogEditorSections = document.querySelector('.blog-editor-sections');
+                if (blogEditorSections) {
+                    const loadingOverlay = blogEditorSections.querySelector('#blog-generate-loading');
+                    if (loadingOverlay) {
+                        loadingOverlay.remove();
+                    }
+                    blogEditorSections.style.position = '';
+                }
                 showResult(data, 'generate');
+                // 사용량 업데이트
+                updateUsageInfo();
             }, 500);
-        }, 1000);
+        }, 600);
 
     } catch (error) {
+        // 로딩 오버레이 제거
+        const blogEditorSections = document.querySelector('.blog-editor-sections');
+        if (blogEditorSections) {
+            const loadingOverlay = blogEditorSections.querySelector('#blog-generate-loading');
+            if (loadingOverlay) {
+                loadingOverlay.remove();
+            }
+            blogEditorSections.style.position = '';
+        }
         showError(error.message);
         hideLoading();
     }
@@ -884,16 +1728,23 @@ async function handleGenerateIdeas() {
         generateBtn.disabled = true;
         generateBtn.textContent = '생성 중...';
     }
-    if (statusText) {
-        statusText.style.display = 'block';
-        statusText.textContent = '아이디어 생성 중입니다...';
+
+    // 결과 영역 표시 및 로딩 메시지 표시
+    const ideasResult = document.getElementById('ideas-result');
+    const ideasResultContent = document.getElementById('ideas-result-content');
+    if (ideasResult) {
+        ideasResult.style.display = 'block';
+    }
+    if (ideasResultContent) {
+        ideasResultContent.innerHTML = `
+            <div style="display: flex; align-items: center; justify-content: center; min-height: 300px; flex-direction: column; gap: 20px;">
+                <div class="spinner" style="border-top-color: #3BB1E2;"></div>
+                <p style="font-size: 1.1rem; color: #666; font-weight: 500;">블로그 프롬프트를 생성 중입니다...</p>
+            </div>
+        `;
     }
 
-    showLoading('블로그 아이디어 생성 중...');
-    updateLoadingStep('아이디어 생성 준비 중', 'processing');
-
     try {
-        updateLoadingStep('GPT에게 아이디어 요청 중', 'processing');
 
         const res = await fetch(`${API_BASE_URL}/api/generate-blog-ideas`, {
             method: 'POST',
@@ -910,24 +1761,25 @@ async function handleGenerateIdeas() {
             })
         });
 
+        // 응답이 JSON인지 확인
+        const contentType = res.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+            const text = await res.text();
+            throw new Error(`서버 응답 오류: ${text.substring(0, 100)}`);
+        }
+
         const data = await res.json();
 
         if (!res.ok || !data.success) {
             throw new Error(data.error || data.detail || '아이디어 생성에 실패했습니다.');
         }
 
-        updateLoadingStep('GPT에게 아이디어 요청 중', 'completed');
-        updateLoadingStep('파일 생성 및 ZIP 패키지 준비 중', 'processing');
-
         setTimeout(() => {
-            updateLoadingStep('파일 생성 및 ZIP 패키지 준비 중', 'completed');
-            hideLoading();
             renderIdeasResult(data);
         }, 500);
     } catch (e) {
         console.error(e);
         showError(e.message || '아이디어 생성 중 오류가 발생했습니다.');
-        hideLoading();
     } finally {
         if (generateBtn) {
             generateBtn.disabled = false;
@@ -936,6 +1788,8 @@ async function handleGenerateIdeas() {
         if (statusText) {
             statusText.style.display = 'none';
         }
+        // 사용량 업데이트
+        updateUsageInfo();
     }
 }
 
@@ -946,6 +1800,9 @@ function renderIdeasResult(data) {
     const zipBtn = document.getElementById('ideas-download-zip-btn');
 
     if (!container || !contentDiv) return;
+
+    // 결과 데이터를 전역 변수에 저장 (탭 전환 시 복원용)
+    window.currentIdeasResult = data;
 
     const ideas = Array.isArray(data.ideas) ? data.ideas : [];
 
@@ -966,7 +1823,7 @@ function renderIdeasResult(data) {
             html += `
                 <div class="idea-card">
                     <div class="idea-card-header">
-                        <span class="idea-index">아이디어 ${idx}</span>
+                        <span class="idea-index">프롬프트 ${idx}</span>
                         ${filePath ? `<button type="button" class="btn-secondary-small" data-file-path="${filePath}" onclick="downloadIdeaFile('${filePath}')">TXT 다운로드</button>` : ''}
                     </div>
                     <div class="idea-card-body">
@@ -1007,10 +1864,35 @@ function renderIdeasResult(data) {
 }
 
 // 단일 아이디어 TXT 파일 다운로드
-function downloadIdeaFile(filePath) {
+async function downloadIdeaFile(filePath) {
     if (!filePath) return;
     const url = filePath.startsWith('http') ? filePath : `${API_BASE_URL}${filePath}`;
-    window.location.href = url;
+    
+    try {
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error('파일 다운로드에 실패했습니다.');
+        }
+        
+        const blob = await response.blob();
+        const downloadUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        
+        // 파일명 추출 (경로에서 마지막 부분)
+        const filename = filePath.split('/').pop() || 'idea.txt';
+        a.download = filename;
+        
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        
+        // 메모리 해제
+        window.URL.revokeObjectURL(downloadUrl);
+    } catch (error) {
+        console.error('다운로드 오류:', error);
+        alert('파일 다운로드에 실패했습니다: ' + error.message);
+    }
 }
 
 // 텍스트 복사 헬퍼 (일반 텍스트용)
@@ -1090,6 +1972,13 @@ async function handleExportBlog() {
             })
         });
 
+        // 응답이 JSON인지 확인
+        const contentType = res.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+            const text = await res.text();
+            throw new Error(`서버 응답 오류: ${text.substring(0, 100)}`);
+        }
+
         const data = await res.json();
 
         if (!res.ok || !data.success) {
@@ -1112,6 +2001,90 @@ async function handleExportBlog() {
         console.error(e);
         hideLoading();
         alert('발행용 파일 생성 중 오류가 발생했습니다: ' + e.message);
+    }
+}
+
+// 이미지 다운로드
+async function handleDownloadImages() {
+    // 현재 블로그 콘텐츠에서 이미지 경로 추출
+    const content = window.currentBlogContent;
+    if (!content) {
+        alert('블로그 콘텐츠가 없습니다.');
+        return;
+    }
+    
+    const generatedImages = content.generated_images || [];
+    if (generatedImages.length === 0) {
+        alert('다운로드할 이미지가 없습니다.');
+        return;
+    }
+    
+    // 이미지 경로 추출 (blog/create_naver/images 기준)
+    const imagePaths = generatedImages.map(img => {
+        let path = img.image_path || img.full_path || '';
+        
+        // image_path가 상대 경로인 경우 처리
+        if (path && !path.startsWith('/')) {
+            // 이미 images/로 시작하면 그대로 사용
+            if (path.startsWith('images/')) {
+                return path;
+            }
+            // images 폴더가 없으면 추가
+            return `images/${path}`;
+        }
+        // /static/blog/create_naver/로 시작하는 경우
+        if (path.startsWith('/static/blog/create_naver/')) {
+            // /static/blog/create_naver/ 부분 제거
+            return path.substring('/static/blog/create_naver/'.length);
+        }
+        return path;
+    }).filter(path => path); // 빈 값 제거
+    
+    if (imagePaths.length === 0) {
+        alert('유효한 이미지 경로를 찾을 수 없습니다.');
+        return;
+    }
+    
+    try {
+        const downloadBtn = document.getElementById('download-images-btn');
+        if (downloadBtn) {
+            downloadBtn.disabled = true;
+            downloadBtn.textContent = '다운로드 준비 중...';
+        }
+        
+        const response = await fetch(`${API_BASE_URL}/api/download-images`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                image_paths: imagePaths
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || '이미지 다운로드 실패');
+        }
+        
+        if (data.zip_path) {
+            // ZIP 파일 다운로드
+            const downloadUrl = `${API_BASE_URL}${data.zip_path}`;
+            window.location.href = downloadUrl;
+        } else {
+            alert('ZIP 파일 경로를 받지 못했습니다.');
+        }
+        
+    } catch (e) {
+        console.error(e);
+        alert('이미지 다운로드 중 오류가 발생했습니다: ' + e.message);
+    } finally {
+        const downloadBtn = document.getElementById('download-images-btn');
+        if (downloadBtn) {
+            downloadBtn.disabled = false;
+            downloadBtn.textContent = '이미지 다운로드';
+        }
     }
 }
 
@@ -1262,12 +2235,35 @@ function renderBlogContent(content) {
 function renderBlogContentSeparated(content) {
     if (!content) return;
 
+    // 로딩 오버레이 제거
+    const blogEditorSections = document.querySelector('.blog-editor-sections');
+    if (blogEditorSections) {
+        const loadingOverlay = blogEditorSections.querySelector('#blog-generate-loading');
+        if (loadingOverlay) {
+            loadingOverlay.remove();
+        }
+        blogEditorSections.style.position = '';
+    }
+
     // Quill 에디터 초기화
     initializeQuillEditors();
 
     // 약간의 지연을 두고 콘텐츠 로드 (에디터 초기화 완료 대기)
     setTimeout(() => {
         loadBlogContentToQuill(content);
+        
+        // 이미지 다운로드 버튼 활성화/비활성화 업데이트
+        const downloadImagesBtn = document.getElementById('download-images-btn');
+        if (downloadImagesBtn) {
+            const hasImages = content.generated_images && content.generated_images.length > 0;
+            downloadImagesBtn.disabled = !hasImages;
+            downloadImagesBtn.style.display = 'inline-block';
+            if (!hasImages) {
+                downloadImagesBtn.title = '생성된 이미지가 없습니다';
+            } else {
+                downloadImagesBtn.title = '';
+            }
+        }
     }, 200);
 }
 
@@ -1588,98 +2584,100 @@ const STORAGE_KEYS = {
     IMAGE_META: 'dmalab_editor_image_meta'
 };
 
-// 에디터 내용을 localStorage에 저장
-function saveEditorContent() {
+// 에디터 내용을 서버에 임시 저장 (IP 기반)
+async function saveEditorContent() {
     try {
+        const draftData = {};
+        
         if (quillTitle) {
-            const titleContent = quillTitle.getContents();
-            localStorage.setItem(STORAGE_KEYS.TITLE, JSON.stringify(titleContent));
+            draftData.title = quillTitle.getContents();
         }
         if (quillBody) {
-            const bodyContent = quillBody.getContents();
-            localStorage.setItem(STORAGE_KEYS.BODY, JSON.stringify(bodyContent));
+            draftData.body = quillBody.getContents();
         }
         if (quillTags) {
-            const tagsContent = quillTags.getContents();
-            localStorage.setItem(STORAGE_KEYS.TAGS, JSON.stringify(tagsContent));
+            draftData.tags = quillTags.getContents();
         }
         // 이미지 메타데이터 저장 (스타일/썸네일/캡션)
+        draftData.image_meta = {
+            styleMap: window.imageStyleMap || {},
+            thumbnailMap: window.imageThumbnailMap || {},
+            captionMap: window.imageCaptionMap || {}
+        };
+        
+        // 서버에 저장 (에러가 발생해도 조용히 처리 - 사용자 경험 방해하지 않음)
         try {
-            const meta = {
-                styleMap: window.imageStyleMap || {},
-                thumbnailMap: window.imageThumbnailMap || {},
-                captionMap: window.imageCaptionMap || {}
-            };
-            localStorage.setItem(STORAGE_KEYS.IMAGE_META, JSON.stringify(meta));
+            await fetch(`${API_BASE_URL}/api/save-draft`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(draftData)
+            });
         } catch (e) {
-            console.warn('[DMaLab] 이미지 메타데이터 저장 중 오류:', e);
+            // 네트워크 오류 등은 조용히 처리 (사용자에게 알리지 않음)
+            console.warn('[DMaLab] 임시 저장 실패 (조용히 처리):', e);
         }
     } catch (error) {
         console.error('에디터 내용 저장 실패:', error);
     }
 }
 
-// localStorage에서 에디터 내용 복원
-function restoreEditorContent() {
+// 서버에서 에디터 내용 복원 (IP 기반)
+async function restoreEditorContent() {
     try {
-        if (quillTitle) {
-            const savedTitle = localStorage.getItem(STORAGE_KEYS.TITLE);
-            if (savedTitle) {
-                const titleDelta = JSON.parse(savedTitle);
-                if (titleDelta && titleDelta.ops && titleDelta.ops.length > 0) {
-                    quillTitle.setContents(titleDelta);
-                }
-            }
+        const response = await fetch(`${API_BASE_URL}/api/get-draft`);
+        if (!response.ok) {
+            throw new Error('임시 저장 불러오기 실패');
         }
-        if (quillBody) {
-            const savedBody = localStorage.getItem(STORAGE_KEYS.BODY);
-            if (savedBody) {
-                const bodyDelta = JSON.parse(savedBody);
-                if (bodyDelta && bodyDelta.ops && bodyDelta.ops.length > 0) {
-                    quillBody.setContents(bodyDelta);
-                }
-            }
+        
+        const data = await response.json();
+        if (!data.success || !data.title && !data.body && !data.tags) {
+            // 저장된 내용이 없음
+            return;
         }
-        if (quillTags) {
-            const savedTags = localStorage.getItem(STORAGE_KEYS.TAGS);
-            if (savedTags) {
-                const tagsDelta = JSON.parse(savedTags);
-                if (tagsDelta && tagsDelta.ops && tagsDelta.ops.length > 0) {
-                    quillTags.setContents(tagsDelta);
-                }
-            }
+        
+        if (quillTitle && data.title && data.title.ops && data.title.ops.length > 0) {
+            quillTitle.setContents(data.title);
         }
+        if (quillBody && data.body && data.body.ops && data.body.ops.length > 0) {
+            quillBody.setContents(data.body);
+        }
+        if (quillTags && data.tags && data.tags.ops && data.tags.ops.length > 0) {
+            quillTags.setContents(data.tags);
+        }
+        
         // 이미지 메타데이터 복원
-        try {
-            const savedMeta = localStorage.getItem(STORAGE_KEYS.IMAGE_META);
-            if (savedMeta) {
-                const meta = JSON.parse(savedMeta);
-                window.imageStyleMap = meta.styleMap || {};
-                window.imageThumbnailMap = meta.thumbnailMap || {};
-                window.imageCaptionMap = meta.captionMap || {};
-            } else {
-                window.imageStyleMap = {};
-                window.imageThumbnailMap = {};
-                window.imageCaptionMap = {};
-            }
-        } catch (e) {
-            console.warn('[DMaLab] 이미지 메타데이터 복원 중 오류:', e);
+        if (data.image_meta) {
+            window.imageStyleMap = data.image_meta.styleMap || {};
+            window.imageThumbnailMap = data.image_meta.thumbnailMap || {};
+            window.imageCaptionMap = data.image_meta.captionMap || {};
+        } else {
             window.imageStyleMap = {};
             window.imageThumbnailMap = {};
             window.imageCaptionMap = {};
         }
+        
+        // 에디터 내용 복원 후 높이 재계산
+        setTimeout(() => {
+            sendHeightToParent();
+        }, 100);
     } catch (error) {
         console.error('에디터 내용 복원 실패:', error);
     }
 }
 
-// 에디터 내용 초기화 (localStorage도 함께 삭제)
-function clearEditorContent() {
+// 에디터 내용 초기화 (서버의 임시 저장도 함께 삭제)
+async function clearEditorContent() {
     try {
-        localStorage.removeItem(STORAGE_KEYS.TITLE);
-        localStorage.removeItem(STORAGE_KEYS.BODY);
-        localStorage.removeItem(STORAGE_KEYS.TAGS);
-        localStorage.removeItem(STORAGE_KEYS.IMAGE_META);
+        // 서버에서 임시 저장 삭제
+        try {
+            await fetch(`${API_BASE_URL}/api/delete-draft`, {
+                method: 'DELETE'
+            });
+        } catch (e) {
+            console.warn('[DMaLab] 임시 저장 삭제 실패:', e);
+        }
         
         if (quillTitle) quillTitle.setContents([]);
         if (quillBody) quillBody.setContents([]);
@@ -1689,23 +2687,25 @@ function clearEditorContent() {
         window.imageStyleMap = {};
         window.imageThumbnailMap = {};
         window.imageCaptionMap = {};
+        
+        // 에디터 내용 초기화 후 높이 재계산
+        setTimeout(() => {
+            sendHeightToParent();
+        }, 100);
     } catch (error) {
         console.error('에디터 내용 초기화 실패:', error);
     }
 }
 
-// 임시 저장된 에디터 내용이 있는지 확인
-function hasSavedEditorContent() {
+// 임시 저장된 에디터 내용이 있는지 확인 (서버에서 확인)
+async function hasSavedEditorContent() {
     try {
-        const title = localStorage.getItem(STORAGE_KEYS.TITLE);
-        const body = localStorage.getItem(STORAGE_KEYS.BODY);
-        const tags = localStorage.getItem(STORAGE_KEYS.TAGS);
-
-        const hasTitle = !!(title && JSON.parse(title)?.ops?.length);
-        const hasBody = !!(body && JSON.parse(body)?.ops?.length);
-        const hasTags = !!(tags && JSON.parse(tags)?.ops?.length);
-
-        return hasTitle || hasBody || hasTags;
+        const response = await fetch(`${API_BASE_URL}/api/get-draft`);
+        if (!response.ok) {
+            return false;
+        }
+        const data = await response.json();
+        return data.success && (data.title || data.body || data.tags);
     } catch (e) {
         console.error('임시 저장 여부 확인 중 오류:', e);
         return false;
@@ -1713,8 +2713,9 @@ function hasSavedEditorContent() {
 }
 
 // 새로고침 시 임시 저장된 글을 불러올지 물어보는 팝업 표시
-function showRestoreDraftModalIfNeeded() {
-    if (!hasSavedEditorContent()) {
+async function showRestoreDraftModalIfNeeded() {
+    const hasContent = await hasSavedEditorContent();
+    if (!hasContent) {
         return;
     }
 
@@ -1723,6 +2724,31 @@ function showRestoreDraftModalIfNeeded() {
         return;
     }
 
+    // iframe 내부에서 실행 중이면 부모 페이지에 모달 표시 요청
+    if (window.parent !== window) {
+        window.parent.postMessage({
+            type: 'show-restore-modal',
+            source: 'dmalab'
+        }, '*');
+        
+        // 부모 페이지에서 선택 결과를 받을 리스너 등록
+        const messageHandler = (event) => {
+            // 보안: 부모 페이지에서만 메시지 수신
+            if (event.data && event.data.type === 'restore-modal-action') {
+                const action = event.data.action;
+                if (action === 'restore') {
+                    restoreEditorContent();
+                } else if (action === 'discard') {
+                    clearEditorContent();
+                }
+                window.removeEventListener('message', messageHandler);
+            }
+        };
+        window.addEventListener('message', messageHandler);
+        return;
+    }
+
+    // iframe 외부에서 실행 중이면 기존 방식대로 표시
     const overlay = document.createElement('div');
     overlay.className = 'autosave-modal-overlay';
 
@@ -1742,6 +2768,11 @@ function showRestoreDraftModalIfNeeded() {
 
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
+    
+    // 모달이 표시된 후 높이 재계산 (iframe 높이 조정)
+    setTimeout(() => {
+        sendHeightToParent();
+    }, 100);
 
     const handleAction = (action) => {
         if (action === 'restore') {
@@ -1750,6 +2781,10 @@ function showRestoreDraftModalIfNeeded() {
             clearEditorContent();
         }
         overlay.remove();
+        // 모달이 닫힌 후 높이 재계산
+        setTimeout(() => {
+            sendHeightToParent();
+        }, 100);
     };
 
     overlay.addEventListener('click', (e) => {
@@ -1779,12 +2814,14 @@ function initializeQuillEditors() {
             placeholder: '제목을 입력하세요...'
         });
         
-        // 제목 변경 시 자동 저장 (디바운싱 적용)
+        // 제목 변경 시 자동 저장 및 높이 재계산 (디바운싱 적용)
         let titleSaveTimeout = null;
         quillTitle.on('text-change', function() {
             clearTimeout(titleSaveTimeout);
             titleSaveTimeout = setTimeout(() => {
-                saveEditorContent();
+                saveEditorContent(); // async 함수이지만 await 없이 호출 (백그라운드 저장)
+                // 높이 재계산
+                sendHeightToParent();
             }, 500); // 500ms 후 저장
         });
 
@@ -1809,6 +2846,17 @@ function initializeQuillEditors() {
                 toolbar: toolbarOptions
             },
             placeholder: '본문을 입력하세요...'
+        });
+
+        // 본문 변경 시 자동 저장 및 높이 재계산 (디바운싱 적용)
+        let bodySaveTimeout = null;
+        quillBody.on('text-change', function() {
+            clearTimeout(bodySaveTimeout);
+            bodySaveTimeout = setTimeout(() => {
+                saveEditorContent(); // async 함수이지만 await 없이 호출 (백그라운드 저장)
+                // 높이 재계산
+                sendHeightToParent();
+            }, 500); // 500ms 후 저장
         });
 
         // 이미지 업로드 핸들러
@@ -2019,14 +3067,8 @@ function initializeQuillEditors() {
             });
         }, 150);
         
-        // 본문 변경 시 자동 저장 (디바운싱 적용)
-        let bodySaveTimeout = null;
-        quillBody.on('text-change', function() {
-            clearTimeout(bodySaveTimeout);
-            bodySaveTimeout = setTimeout(() => {
-                saveEditorContent();
-            }, 500); // 500ms 후 저장
-        });
+        // 본문 변경 시 자동 저장은 이미 위에서 설정됨 (1963번 줄)
+        // 중복 이벤트 리스너 제거
     }
 
     // 태그 에디터 (툴바 없이 간단한 텍스트 입력)
@@ -2040,12 +3082,14 @@ function initializeQuillEditors() {
             placeholder: '태그를 입력하세요 (쉼표로 구분)...'
         });
         
-        // 태그 변경 시 자동 저장 (디바운싱 적용)
+        // 태그 변경 시 자동 저장 및 높이 재계산 (디바운싱 적용)
         let tagsSaveTimeout = null;
         quillTags.on('text-change', function() {
             clearTimeout(tagsSaveTimeout);
             tagsSaveTimeout = setTimeout(() => {
                 saveEditorContent();
+                // 높이 재계산
+                sendHeightToParent();
             }, 500); // 500ms 후 저장
         });
     }
@@ -2501,13 +3545,33 @@ function loadBlogContentToQuill(content) {
         });
     }
 
+    // 외부 링크를 에디터 하단에 배치 (서브타이틀 없이 링크만)
+    if (content.external_links && Array.isArray(content.external_links) && content.external_links.length > 0) {
+        bodyOps.push({ insert: '\n\n' });
+        content.external_links.forEach((link, index) => {
+            if (link && link.trim()) {
+                // 링크를 클릭 가능한 형태로 삽입
+                bodyOps.push({ 
+                    insert: link, 
+                    attributes: { 
+                        link: link,
+                        color: '#0066cc'
+                    } 
+                });
+                bodyOps.push({ insert: '\n' });
+            }
+        });
+    }
+
     // 본문을 Quill에 설정
     quillBody.setContents({ ops: bodyOps });
     
-    // 콘텐츠 로드 후 자동 저장
+    // 콘텐츠 로드 후 자동 저장 및 높이 재계산
     setTimeout(() => {
         saveEditorContent();
         window._isLoadingBlogContent = false; // 콘텐츠 로딩 완료
+        // 높이 재계산
+        sendHeightToParent();
     }, 100);
 
     // 태그 로드

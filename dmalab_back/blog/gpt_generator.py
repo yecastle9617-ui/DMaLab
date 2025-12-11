@@ -11,8 +11,10 @@ from datetime import datetime
 from dotenv import load_dotenv
 from openai import OpenAI
 
-# .env 파일 로드
-load_dotenv()
+# .env 파일 로드 (프로젝트 루트에서)
+current_dir = Path(__file__).parent
+project_root = current_dir.parent.parent  # DMaLab 디렉토리
+load_dotenv(project_root / ".env")
 
 # OpenAI 클라이언트 (지연 초기화)
 _client = None
@@ -43,7 +45,7 @@ def load_prompt_template() -> Dict[str, Any]:
     """
     current_dir = Path(__file__).parent
     project_dir = current_dir.parent
-    template_path = project_dir / "data" / "config" / "prompt_template.json"
+    template_path = project_dir / "config" / "prompt_template.json"
     
     with open(template_path, 'r', encoding='utf-8') as f:
         return json.load(f)
@@ -171,16 +173,18 @@ def get_max_tokens_for_level(blog_level: str) -> int:
         blog_level: 블로그 레벨 ("new", "mid", "high")
     
     Returns:
-        최대 토큰 수
+        최대 토큰 수 (GPT-4o 모델 최대값 16384 이하로 제한)
     """
     # 한글 1자 ≈ 1.5~2 토큰, JSON 구조 고려하여 여유 있게 설정
     # JSON 구조, 스타일 정보, 마크업 등을 고려하여 충분한 토큰 할당
+    # GPT-4o 모델의 최대 출력 토큰 수는 16384이므로 이를 초과하지 않도록 설정
+    # 실제 텍스트에 더 많은 토큰을 할당하기 위해 최대값에 가깝게 설정
     level_tokens = {
-        "new": 12000,      # 2000~2500자 → 약 4000~5000 토큰 + JSON 구조 여유분
-        "mid": 15000,      # 2500~3000자 → 약 5000~6000 토큰 + JSON 구조 여유분
-        "high": 20000      # 3000~3500자 이상 → 약 6000~7000 토큰 + JSON 구조 여유분
+        "new": 15000,      # 2000~2500자 → 약 4000~5000 토큰 + JSON 구조 여유분 (최대한 활용)
+        "mid": 16000,      # 2500~3000자 → 약 5000~6000 토큰 + JSON 구조 여유분 (최대한 활용)
+        "high": 16384      # 3000~3500자 이상 → 약 6000~7000 토큰 + JSON 구조 여유분 (최대값)
     }
-    return level_tokens.get(blog_level, 15000)  # 기본값: mid
+    return level_tokens.get(blog_level, 16000)  # 기본값: mid
 
 
 def generate_blog_content(
@@ -407,8 +411,8 @@ def generate_blog_ideas(
     # 개수 제한
     if count < 1:
         count = 1
-    if count > 10:
-        count = 10
+    if count > 3:
+        count = 3
 
     client = get_openai_client()
 

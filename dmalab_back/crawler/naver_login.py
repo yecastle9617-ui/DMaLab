@@ -5,8 +5,10 @@ import random
 import os
 from dotenv import load_dotenv
 
-# 환경 변수 로드
-load_dotenv()
+# 환경 변수 로드 (프로젝트 루트에서)
+current_dir = Path(__file__).parent
+project_root = current_dir.parent.parent  # DMaLab 디렉토리
+load_dotenv(project_root / ".env")
 
 def human_type(page, element, text, min_delay=50, max_delay=150):
     """인간처럼 타이핑하는 함수 (랜덤 딜레이)"""

@@ -3,22 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DMaLab - 네이버 블로그 크롤링</title>
+    <title>DMaLab 마케팅 자동화 플랫폼</title>
     <!-- Quill Editor -->
     <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="app">
-        <header class="header">
-            <h1>🚀 DMaLab</h1>
-            <p>네이버 블로그 크롤링 및 키워드 분석</p>
-        </header>
-
         <div class="tabs">
-            <button class="tab-btn" data-tab="process">네이버 상위 블로그 분석</button>
-            <button class="tab-btn active" data-tab="generate">블로그 생성</button>
-            <button class="tab-btn" data-tab="ideas">블로그 아이디어 생성</button>
+            <button class="tab-btn" data-tab="process">상위 블로그 분석</button>
+            <button class="tab-btn" data-tab="generate">AI 블로그(이미지) 생성</button>
+            <button class="tab-btn" data-tab="ideas">AI 블로그 제목 + 프롬프트 생성</button>
         </div>
 
         <div class="content">
@@ -27,14 +22,15 @@
             <!-- 네이버 상위 블로그 분석 탭 -->
             <div id="process-tab" class="tab-content">
                 <div class="form-section">
-                    <h2>네이버 상위 블로그 분석</h2>
+                    <h2>상위 블로그 분석</h2>
                     <div class="form-group">
                         <label>검색 키워드</label>
                         <input type="text" id="process-keyword" placeholder="예: 아임웹 홈페이지 제작">
                     </div>
                     <div class="form-group">
                         <label>처리할 블로그 개수</label>
-                        <input type="number" id="process-count" value="3" min="1" max="10">
+                        <input type="number" id="process-count" value="3" min="1" max="3">
+                        <small class="form-help">무료버전은 최대 3개까지만 가능합니다.</small>
                     </div>
                     <div class="form-group checkbox-group">
                         <label class="checkbox-label">
@@ -55,13 +51,23 @@
                         <input type="number" id="process-mincount" value="2" min="1">
                     </div>
                     <button onclick="handleProcess()">분석 시작</button>
+                    <div id="process-usage-info" class="usage-info" style="margin-top: 10px; padding: 10px; background: #f5f5f5; border-radius: 6px; font-size: 0.9rem; color: #666;">
+                        <span id="process-usage-text">사용량 확인 중...</span>
+                    </div>
+                    
+                    <!-- 로딩 영역 (상위 블로그 분석 탭 전용) -->
+                    <div id="process-loading" class="loading" style="display: none; margin-top: 20px;">
+                        <div class="spinner"></div>
+                        <p id="process-loading-message">처리 중...</p>
+                        <div id="process-loading-steps" class="loading-steps"></div>
+                    </div>
                 </div>
             </div>
 
             <!-- GPT 블로그 생성 탭 -->
-            <div id="generate-tab" class="tab-content active">
+            <div id="generate-tab" class="tab-content">
                 <div class="form-section">
-                    <h2>블로그 생성</h2>
+                    <h2>AI 블로그(이미지) 생성</h2>
                     
                     <div class="form-group">
                         <label class="required">키워드</label>
@@ -105,7 +111,7 @@
                             </label>
                         </div>
                         <div class="form-group" style="margin-top: 8px;">
-                            <label>자동 수집 블로그 개수 (1~10)</label>
+                            <label>자동 수집 블로그 개수 (1~3)</label>
                             <input type="number" id="generate-reference-count" value="3" min="1" max="10">
                         </div>
                         <small class="form-help">
@@ -163,12 +169,15 @@
                     </div>
                     
                     <button onclick="handleGenerateBlog()">블로그 생성</button>
+                    <div id="generate-usage-info" class="usage-info" style="margin-top: 10px; padding: 10px; background: #f5f5f5; border-radius: 6px; font-size: 0.9rem; color: #666;">
+                        <span id="generate-usage-text">사용량 확인 중...</span>
+                    </div>
                     
-                    <!-- 로딩 영역 (블로그 생성 버튼 아래) -->
-                    <div id="loading" class="loading" style="display: none; margin-top: 20px;">
+                    <!-- 로딩 영역 (블로그 생성 탭 전용) -->
+                    <div id="generate-loading" class="loading" style="display: none; margin-top: 20px;">
                         <div class="spinner"></div>
-                        <p id="loading-message">처리 중...</p>
-                        <div id="loading-steps" class="loading-steps"></div>
+                        <p id="generate-loading-message">처리 중...</p>
+                        <div id="generate-loading-steps" class="loading-steps"></div>
                     </div>
                 </div>
             </div>
@@ -176,7 +185,7 @@
             <!-- 블로그 아이디어 생성 탭 -->
             <div id="ideas-tab" class="tab-content">
                 <div class="form-section">
-                    <h2>블로그 아이디어 생성 (제목 + 작성 프롬프트)</h2>
+                    <h2>AI 블로그 작성 프롬프트 생성</h2>
 
                     <div class="form-group">
                         <label class="required">대표 키워드</label>
@@ -202,7 +211,7 @@
 - 주 타깃: 30대 여성 자영업자
 - 톤: 친근하지만 전문적인 느낌
 - 주로 다루는 내용: 온라인 마케팅, 홈페이지 제작 사례 공유" maxlength="500"></textarea>
-                        <small class="form-help">블로그 톤, 타깃, 주로 다루는 주제 등을 자유롭게 적어주세요. 아이디어에 최대한 반영됩니다.</small>
+                        <small class="form-help">블로그 톤, 타깃, 주로 다루는 주제 등을 자유롭게 적어주세요. 프롬프트에 최대한 반영됩니다.</small>
                     </div>
 
                     <div class="form-group">
@@ -217,19 +226,22 @@
                     <div class="form-group">
                         <label class="required">생성 개수</label>
                         <input type="number" id="ideas-count" value="3" min="1" max="10">
-                        <small class="form-help">1개 ~ 10개까지 한 번에 생성할 수 있습니다.</small>
+                        <small class="form-help">무료버전은 1개 ~ 3개까지 한 번에 생성할 수 있습니다.</small>
                     </div>
 
-                    <button id="ideas-generate-btn" onclick="handleGenerateIdeas()">아이디어 생성</button>
+                    <button id="ideas-generate-btn" onclick="handleGenerateIdeas()">프롬프트 생성</button>
+                    <div id="ideas-usage-info" class="usage-info" style="margin-top: 10px; padding: 10px; background: #f5f5f5; border-radius: 6px; font-size: 0.9rem; color: #666;">
+                        <span id="ideas-usage-text">사용량 확인 중...</span>
+                    </div>
                     <p id="ideas-status" class="status-text" style="display: none; margin-top: 8px; font-size: 0.9rem; color: #667eea;">
-                        아이디어 생성 중입니다...
+                        제목과 프롬프트를 생성 중입니다...
                     </p>
 
-                    <!-- 아이디어 탭에서도 공용 로딩 영역 사용 -->
-                    <div id="loading" class="loading" style="display: none; margin-top: 20px;">
+                    <!-- 로딩 영역 (아이디어 생성 탭 전용) -->
+                    <div id="ideas-loading" class="loading" style="display: none; margin-top: 20px;">
                         <div class="spinner"></div>
-                        <p id="loading-message">처리 중...</p>
-                        <div id="loading-steps" class="loading-steps"></div>
+                        <p id="ideas-loading-message">처리 중...</p>
+                        <div id="ideas-loading-steps" class="loading-steps"></div>
                     </div>
                 </div>
             </div>
@@ -241,6 +253,8 @@
                         <button onclick="copyBlogContentToNaverEditor()" class="btn-copy">내용 복사하기</button>
                     </div>
                 </div>
+                
+                <div id="result-content"></div>
                 
                 <div class="blog-editor-sections">
                     <!-- 제목 영역 -->
@@ -263,9 +277,14 @@
 
                     <!-- 네이버 발행용 파일 다운로드 버튼 -->
                     <div class="editor-section">
-                        <button id="export-blog-btn" class="btn-export" onclick="handleExportBlog()">
-                            발행용 파일 다운로드
-                        </button>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <button id="export-blog-btn" class="btn-export" onclick="handleExportBlog()">
+                                발행용 파일 다운로드
+                            </button>
+                            <button id="download-images-btn" class="btn-export" onclick="handleDownloadImages()" style="display: inline-block;">
+                                이미지 다운로드
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -273,7 +292,7 @@
             <!-- 블로그 아이디어 결과 영역 -->
             <div id="ideas-result" class="result" style="display: none;">
                 <div class="result-header">
-                    <h3>생성된 블로그 아이디어</h3>
+                    <h3>생성된 블로그 프롬프트</h3>
                     <div class="result-actions">
                         <button id="ideas-download-zip-btn" class="btn-export" style="display: none;">
                             전체 다운로드
